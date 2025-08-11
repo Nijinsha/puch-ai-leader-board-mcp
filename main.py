@@ -31,6 +31,7 @@ from typing import Any, Dict, List
 import aiohttp
 from dotenv import load_dotenv
 
+
 from fastmcp import FastMCP
 
 # Load environment variables
@@ -45,7 +46,15 @@ AUTH_TOKEN = os.getenv("AUTH_TOKEN", "default-secure-token")
 MY_NUMBER = os.getenv("MY_NUMBER", "Unknown")
 
 # Create FastMCP server instance
+
 app = FastMCP("puch-leaderboard-mcp")
+
+# Simulate onConnect: send leaderboard on connect
+@app.tool("on_connect", description="Runs automatically when user connects to MCP")
+async def on_connect_tool(ctx) -> str:
+    """Runs automatically when user connects to MCP. Sends the top 5 leaderboard as a welcome message."""
+    leaderboard = await top_n_leaderboard_tool(5)
+    return leaderboard
 # Emoji bar chart helper
 def emoji_bar(value, max_value, length=10, emoji='🟩'):
     if max_value == 0:
