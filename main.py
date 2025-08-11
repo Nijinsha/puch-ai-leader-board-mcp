@@ -91,8 +91,13 @@ async def seed_initial_data():
     finally:
         conn.close()
 
-# Seed initial data when module is imported
-asyncio.create_task(seed_initial_data())
+
+# Start initial data seed and background sync when module is imported
+async def startup_tasks():
+    await seed_initial_data()
+    asyncio.create_task(sync_leaderboard())
+
+asyncio.create_task(startup_tasks())
 
 async def fetch_leaderboard():
     """Fetch leaderboard data from Puch AI API."""
@@ -541,27 +546,10 @@ async def database_status_tool() -> str:
     finally:
         conn.close()
 
-# Start background sync task when module is imported
-asyncio.create_task(seed_initial_data())
 
 async def main():
     """Main entry point."""
-    # Initialize database
-    init_database()
-    
-    # Start background sync task
-    sync_task = asyncio.create_task(sync_leaderboard())
-    
-    try:
-        # Start the FastMCP server
-        await app.run()
-    finally:
-        # Cancel background task
-        sync_task.cancel()
-        try:
-            await sync_task
-        except asyncio.CancelledError:
-            pass
+    await app.run()
 
 if __name__ == "__main__":
     asyncio.run(main())
