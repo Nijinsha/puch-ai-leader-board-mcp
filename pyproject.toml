@@ -12,6 +12,7 @@ dependencies = [
     "python-multipart>=0.0.6",
     "fastmcp>=2.11.2",
     "aiohttp>=3.12.15",
+    "pytz>=2025.2",
 ]
 
 [project.optional-dependencies]

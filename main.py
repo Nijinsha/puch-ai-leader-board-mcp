@@ -1,3 +1,12 @@
+import re
+# Helper function to remove special characters except emojis
+def sanitize_response(text: str) -> str:
+    # Remove special characters except emojis and common punctuation
+    # Allow: a-zA-Z0-9, whitespace, emojis, and .,:;!?@#%&*()[]-_+=/\\'"\n
+    # Remove angle brackets, curly braces, and other unwanted symbols
+    # Unicode emoji range: [\U0001F300-\U0001FAFF]
+    # This regex keeps emojis, alphanumerics, whitespace, and common punctuation
+    return re.sub(r"[<>\{\}\^`$|~]", "", text)
 #!/usr/bin/env python3
 """MCP server with validate and bearer token functions using FastMCP."""
 
@@ -8,6 +17,7 @@ import sqlite3
 import time
 import os
 from datetime import datetime
+import pytz
 from typing import Any, Dict, List
 import aiohttp
 from dotenv import load_dotenv
@@ -343,7 +353,7 @@ async def top_5_leaderboard_tool() -> str:
             result += f"   👥 Team Size: {team_size}\n"
             result += f"   👀 Unique Visitors: {visitors:,}\n\n"
         
-        result += f"🔄 *Last Updated:* {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    # Last Updated removed as per request
         return result
         
     except Exception as e:
@@ -394,7 +404,7 @@ async def top_10_leaderboard_tool() -> str:
             result += f"   👥 Team Size: {team_size}\n"
             result += f"   👀 Unique Visitors: {visitors:,}\n\n"
         
-        result += f"🔄 *Last Updated:* {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    # Last Updated removed as per request
         return result
         
     except Exception as e:
@@ -445,12 +455,11 @@ async def get_leaderboard_stats_tool(team_name: str) -> str:
 
     # Add unique visitors info
     unique_visitors = team_stats.get("unique_visitors", "N/A")
+    safe_team_name = sanitize_response(team_name)
     result = f"🏆 *Team Rank Information*\n\n"
-    result += f"📊 Team: {team_name}\n"
+    result += f"📊 Team: {safe_team_name}\n"
     result += f"🥇 Current Rank: #{rank}\n"
     result += f"👤 Unique Visitors: {unique_visitors}\n"
-    result += f"🔄 Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-    result += f"💡 *Note:* Only rank and unique visitor information is displayed for content safety"
     return result
 
 @app.tool("refresh_leaderboard")
@@ -461,43 +470,35 @@ async def refresh_leaderboard_tool() -> str:
         leaderboard_data = await fetch_leaderboard()
         if leaderboard_data:
             store_leaderboard_data(leaderboard_data)
-            return f"""🔄 *Leaderboard Refreshed Successfully!*
+            return sanitize_response(f"""🔄 *Leaderboard Refreshed Successfully!*
 
 📊 {len(leaderboard_data)} teams updated
-⏰ Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
-✅ Data has been synchronized with Puch AI API"""
+✅ Data has been synchronized with Puch AI API""")
         else:
-            return f"""❌ *Refresh Failed*
+            return sanitize_response(f"""❌ *Refresh Failed*
 
 📊 No data received from API
-💡 Please check your internet connection
-⏰ Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"""
+💡 Please check your internet connection""")
     except Exception as e:
-        return f"""❌ *Refresh Error*
+        return sanitize_response(f"""❌ *Refresh Error*
 
-🔍 Error: {str(e)}
-⏰ Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"""
+🔍 Error: {str(e)}""")
 
 @app.tool("database_status")
 async def database_status_tool() -> str:
     """Get current database status and statistics."""
     conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
     try:
+        cursor = conn.cursor()
         # Get total records
         cursor.execute('SELECT COUNT(*) FROM leaderboard')
         total_records = cursor.fetchone()[0]
-        
+
         # Get unique teams
         cursor.execute('SELECT COUNT(DISTINCT team_name) FROM leaderboard')
         unique_teams = cursor.fetchone()[0]
-        
-        # Get latest update
-        cursor.execute('SELECT MAX(last_updated) FROM leaderboard')
-        latest_update = cursor.fetchone()[0]
-        
+
         # Get top 5 teams by visitors
         cursor.execute('''
             SELECT team_name, unique_visitors, team_size
@@ -513,7 +514,7 @@ async def database_status_tool() -> str:
                 "unique_visitors": row[1],
                 "team_size": row[2]
             })
-        
+
         # Add emoji based on data status
         if total_records > 0:
             status_emoji = "🟢"
@@ -521,14 +522,14 @@ async def database_status_tool() -> str:
         else:
             status_emoji = "🟡"
             status_message = "Database is empty, waiting for initial data"
-        
+
         # Format for WhatsApp
         result = f"{status_emoji} *Database Status*\n\n"
         result += f"📊 Total Records: {total_records:,}\n"
         result += f"👥 Unique Teams: {unique_teams}\n"
-        result += f"🕒 Last Update: {latest_update}\n"
+        # Last Update removed as per request
         result += f"🔄 Sync Status: Active (30s interval)\n\n"
-        
+
         if top_teams:
             result += "🏆 *Top Teams:*\n"
             for i, team in enumerate(top_teams[:3], 1):
@@ -541,15 +542,12 @@ async def database_status_tool() -> str:
                 else:
                     medal = f"{i}️⃣"
                 result += f"{medal} {team['team_name']} ({team['unique_visitors']:,} visitors)\n"
-        
-        return result
-        
+
+        return sanitize_response(result)
     except Exception as e:
-        return f"❌ *Database Error*\n\n🔍 Error getting database status: {str(e)}"
+        return sanitize_response(f"❌ *Database Error*\n\n🔍 Error getting database status: {str(e)}")
     finally:
         conn.close()
-
-
 async def main():
     """Main entry point."""
     await app.run()
