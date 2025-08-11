@@ -442,13 +442,16 @@ async def get_leaderboard_stats_tool(team_name: str) -> str:
         finally:
             conn.close()
         
-        result = f"🏆 *Team Rank Information*\n\n"
-        result += f"📊 Team: {team_name}\n"
-        result += f"🥇 Current Rank: #{rank}\n"
-        result += f"🔄 Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-        result += f"💡 *Note:* Only rank information is displayed for content safety"
-        
-        return result
+
+    # Add unique visitors info
+    unique_visitors = team_stats.get("unique_visitors", "N/A")
+    result = f"🏆 *Team Rank Information*\n\n"
+    result += f"📊 Team: {team_name}\n"
+    result += f"🥇 Current Rank: #{rank}\n"
+    result += f"👤 Unique Visitors: {unique_visitors}\n"
+    result += f"🔄 Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+    result += f"💡 *Note:* Only rank and unique visitor information is displayed for content safety"
+    return result
 
 @app.tool("refresh_leaderboard")
 async def refresh_leaderboard_tool() -> str:
