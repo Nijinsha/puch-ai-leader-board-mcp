@@ -1,3 +1,6 @@
+# Place these after app = FastMCP(...)
+
+# Place these after app = FastMCP(...)
 import re
 # Helper function to remove special characters except emojis
 def sanitize_response(text: str) -> str:
@@ -37,6 +40,172 @@ MY_NUMBER = os.getenv("MY_NUMBER", "Unknown")
 
 # Create FastMCP server instance
 app = FastMCP("puch-leaderboard-mcp")
+# Emoji bar chart helper
+def emoji_bar(value, max_value, length=10, emoji='🟩'):
+    if max_value == 0:
+        return ''
+    bars = int((value / max_value) * length)
+    return emoji * bars
+
+# --- Tool: Team Comparison ---
+@app.tool("compare_teams")
+async def compare_teams_tool(team_names: str) -> str:
+    """Compare two or more teams side-by-side by unique visitors and team size."""
+    names = [name.strip() for name in team_names.split(",") if name.strip()]
+    if len(names) < 2:
+        return "❌ *Error*\n\nPlease provide at least two team names separated by commas."
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    try:
+        placeholders = ",".join(["?"] * len(names))
+        cursor.execute(f'''SELECT team_name, unique_visitors, team_size FROM leaderboard WHERE team_name IN ({placeholders}) GROUP BY team_name''', names)
+        rows = cursor.fetchall()
+        if not rows:
+            return "❌ *Error*\n\nNo data found for the given teams."
+        # Find max visitors for bar chart
+        max_visitors = max(row[1] for row in rows) if rows else 1
+        result = "🤝 *Team Comparison*\n\n"
+        for row in rows:
+            team_name, visitors, team_size = row
+            bar = emoji_bar(visitors, max_visitors)
+            result += f"*{team_name}* {bar}\n   👥 Team Size: {team_size}\n   👀 Unique Visitors: {visitors:,}\n\n"
+        return result
+    except Exception as e:
+        return f"❌ *Error*\n\n🔍 Error comparing teams: {str(e)}"
+    finally:
+        conn.close()
+
+# --- Tool: Milestone Alerts ---
+MILESTONES = [1000, 5000, 10000, 25000, 50000]
+
+@app.tool("milestone_alert")
+async def milestone_alert_tool(team_name: str) -> str:
+    """Notify if a team has reached a visitor milestone."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    try:
+        cursor.execute('''SELECT unique_visitors FROM leaderboard WHERE team_name = ? ORDER BY unique_visitors DESC LIMIT 1''', (team_name,))
+        row = cursor.fetchone()
+        if not row:
+            return f"❌ *Team Not Found*\n\n🔍 No data for team: {team_name}"
+        visitors = row[0]
+        reached = [m for m in MILESTONES if visitors >= m]
+        if not reached:
+            next_milestone = min([m for m in MILESTONES if m > visitors], default=None)
+            if next_milestone:
+                return f"⏳ *Milestone Alert*\n\n*{team_name}* has {visitors:,} unique visitors.\nNext milestone: {next_milestone:,} visitors."
+            else:
+                return f"*{team_name}* has {visitors:,} unique visitors."
+        else:
+            last = max(reached)
+            return f"🎉 *Milestone Reached!*\n\n*{team_name}* has crossed {last:,} unique visitors!\nCurrent: {visitors:,} visitors."
+    except Exception as e:
+        return f"❌ *Error*\n\n🔍 Error checking milestone: {str(e)}"
+    finally:
+        conn.close()
+
+# --- Tool: Personalized Stats (Subscribe) ---
+subscriptions = {}  # user_id -> team_name
+
+@app.tool("subscribe_team")
+async def subscribe_team_tool(user_id: str, team_name: str) -> str:
+    """Subscribe a user to a team for updates (in-memory demo)."""
+    if not user_id or not team_name:
+        return "❌ *Error*\n\nUser ID and team name required."
+    subscriptions[user_id] = team_name
+    return f"🔔 *Subscribed!*\n\nUser {user_id} will receive updates for team: {team_name}"
+
+@app.tool("my_team_stats")
+async def my_team_stats_tool(user_id: str) -> str:
+    """Get personalized stats for the user's subscribed team."""
+    team_name = subscriptions.get(user_id)
+    if not team_name:
+        return "❌ *Not Subscribed*\n\nYou are not subscribed to any team. Use 'subscribe_team' to subscribe."
+    return await get_leaderboard_stats_tool(team_name)
+
+# --- Tool: Top Movers ---
+previous_ranks = {}  # team_name -> previous rank
+
+def get_current_ranks():
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    try:
+        cursor.execute('''SELECT team_name, unique_visitors FROM leaderboard GROUP BY team_name ORDER BY unique_visitors DESC''')
+        rows = cursor.fetchall()
+        ranks = {row[0]: i+1 for i, row in enumerate(rows)}
+        return ranks
+    except Exception:
+        return {}
+    finally:
+        conn.close()
+
+@app.tool("top_movers")
+async def top_movers_tool() -> str:
+    """Show teams that have moved up or down the most since the last update."""
+    global previous_ranks
+    current_ranks = get_current_ranks()
+    if not previous_ranks:
+        previous_ranks = current_ranks.copy()
+        return "⏳ *Top Movers*\n\nTracking started. Please check again after the next update."
+    # Calculate movement
+    movement = []
+    for team, curr_rank in current_ranks.items():
+        prev_rank = previous_ranks.get(team, curr_rank)
+        change = prev_rank - curr_rank  # positive = moved up
+        if change != 0:
+            movement.append((team, change))
+    # Sort by biggest movers
+    movement.sort(key=lambda x: abs(x[1]), reverse=True)
+    if not movement:
+        result = "🔄 *Top Movers*\n\nNo significant changes since last update."
+    else:
+        result = "📈 *Top Movers*\n\n"
+        for team, change in movement[:5]:
+            arrow = "⬆️" if change > 0 else "⬇️"
+            result += f"{arrow} *{team}* ({abs(change)} places)\n"
+    previous_ranks = current_ranks.copy()
+    return result
+# Custom leaderboard count with emoji bar chart
+@app.tool("top_n_leaderboard")
+async def top_n_leaderboard_tool(n: int = 5) -> str:
+    """Get top N teams from the Puch AI leaderboard with emoji bar chart."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    try:
+        cursor.execute('''
+            SELECT team_name, unique_visitors, team_size
+            FROM leaderboard 
+            GROUP BY team_name 
+            ORDER BY unique_visitors DESC 
+            LIMIT ?
+        ''', (n,))
+        rows = cursor.fetchall()
+        if not rows:
+            return "📊 *No Leaderboard Data*\n\n⏳ Data is being fetched from Puch AI API\n\n🔄 Please wait for the initial sync to complete"
+        max_visitors = max(row[1] for row in rows) if rows else 1
+        result = f"🏆 *Puch AI Hackathon Leaderboard - Top {n}*\n\n"
+        for i, row in enumerate(rows, 1):
+            team_name = row[0]
+            visitors = row[1]
+            team_size = row[2]
+            # Add medal emojis for top 3
+            if i == 1:
+                medal = "🥇"
+            elif i == 2:
+                medal = "🥈"
+            elif i == 3:
+                medal = "🥉"
+            else:
+                medal = f"{i}️⃣"
+            bar = emoji_bar(visitors, max_visitors)
+            result += f"{medal} *{team_name}* {bar}\n"
+            result += f"   👥 Team Size: {team_size}\n"
+            result += f"   👀 Unique Visitors: {visitors:,}\n\n"
+        return result
+    except Exception as e:
+        return f"❌ *Error*\n\n🔍 Error retrieving leaderboard: {str(e)}"
+    finally:
+        conn.close()
 
 # Store for bearer tokens
 bearer_tokens: Dict[str, str] = {}
