@@ -1,7 +1,9 @@
 # Place these after app = FastMCP(...)
 
 # Place these after app = FastMCP(...)
+# Fuzzy matching for team names
 import re
+import difflib
 # Helper function to remove special characters except emojis
 def sanitize_response(text: str) -> str:
     # Remove special characters except emojis and common punctuation
@@ -57,8 +59,19 @@ async def compare_teams_tool(team_names: str) -> str:
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     try:
-        placeholders = ",".join(["?"] * len(names))
-        cursor.execute(f'''SELECT team_name, unique_visitors, team_size FROM leaderboard WHERE team_name IN ({placeholders}) GROUP BY team_name''', names)
+        cursor.execute('SELECT DISTINCT team_name FROM leaderboard')
+        all_teams = [row[0] for row in cursor.fetchall()]
+        # Fuzzy match each name
+        matched_names = []
+        notes = []
+        for name in names:
+            match = difflib.get_close_matches(name, all_teams, n=1, cutoff=0.6)
+            actual = match[0] if match else name
+            matched_names.append(actual)
+            if actual != name:
+                notes.append(f"'{name}'→'{actual}'")
+        placeholders = ",".join(["?"] * len(matched_names))
+        cursor.execute(f'''SELECT team_name, unique_visitors, team_size FROM leaderboard WHERE team_name IN ({placeholders}) GROUP BY team_name''', matched_names)
         rows = cursor.fetchall()
         if not rows:
             return "❌ *Error*\n\nNo data found for the given teams."
@@ -69,6 +82,8 @@ async def compare_teams_tool(team_names: str) -> str:
             team_name, visitors, team_size = row
             bar = emoji_bar(visitors, max_visitors)
             result += f"*{team_name}* {bar}\n   👥 Team Size: {team_size}\n   👀 Unique Visitors: {visitors:,}\n\n"
+        if notes:
+            result += "_Fuzzy matched: " + ", ".join(notes) + "_\n"
         return result
     except Exception as e:
         return f"❌ *Error*\n\n🔍 Error comparing teams: {str(e)}"
@@ -84,21 +99,27 @@ async def milestone_alert_tool(team_name: str) -> str:
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     try:
-        cursor.execute('''SELECT unique_visitors FROM leaderboard WHERE team_name = ? ORDER BY unique_visitors DESC LIMIT 1''', (team_name,))
+        # Fuzzy match team name
+        cursor.execute('SELECT DISTINCT team_name FROM leaderboard')
+        all_teams = [row[0] for row in cursor.fetchall()]
+        match = difflib.get_close_matches(team_name, all_teams, n=1, cutoff=0.6)
+        actual_team = match[0] if match else team_name
+        cursor.execute('''SELECT unique_visitors FROM leaderboard WHERE team_name = ? ORDER BY unique_visitors DESC LIMIT 1''', (actual_team,))
         row = cursor.fetchone()
         if not row:
             return f"❌ *Team Not Found*\n\n🔍 No data for team: {team_name}"
         visitors = row[0]
         reached = [m for m in MILESTONES if visitors >= m]
+        note = f"\n_(Showing results for '{actual_team}')_" if actual_team != team_name else ""
         if not reached:
             next_milestone = min([m for m in MILESTONES if m > visitors], default=None)
             if next_milestone:
-                return f"⏳ *Milestone Alert*\n\n*{team_name}* has {visitors:,} unique visitors.\nNext milestone: {next_milestone:,} visitors."
+                return f"⏳ *Milestone Alert*\n\n*{actual_team}* has {visitors:,} unique visitors.\nNext milestone: {next_milestone:,} visitors.{note}"
             else:
-                return f"*{team_name}* has {visitors:,} unique visitors."
+                return f"*{actual_team}* has {visitors:,} unique visitors.{note}"
         else:
             last = max(reached)
-            return f"🎉 *Milestone Reached!*\n\n*{team_name}* has crossed {last:,} unique visitors!\nCurrent: {visitors:,} visitors."
+            return f"🎉 *Milestone Reached!*\n\n*{actual_team}* has crossed {last:,} unique visitors!\nCurrent: {visitors:,} visitors.{note}"
     except Exception as e:
         return f"❌ *Error*\n\n🔍 Error checking milestone: {str(e)}"
     finally:
@@ -112,8 +133,21 @@ async def subscribe_team_tool(user_id: str, team_name: str) -> str:
     """Subscribe a user to a team for updates (in-memory demo)."""
     if not user_id or not team_name:
         return "❌ *Error*\n\nUser ID and team name required."
-    subscriptions[user_id] = team_name
-    return f"🔔 *Subscribed!*\n\nUser {user_id} will receive updates for team: {team_name}"
+    # Fuzzy match team name
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    try:
+        cursor.execute('SELECT DISTINCT team_name FROM leaderboard')
+        all_teams = [row[0] for row in cursor.fetchall()]
+        match = difflib.get_close_matches(team_name, all_teams, n=1, cutoff=0.6)
+        actual_team = match[0] if match else team_name
+        subscriptions[user_id] = actual_team
+        note = f" (subscribed to '{actual_team}')" if actual_team != team_name else ""
+        return f"🔔 *Subscribed!*\n\nUser {user_id} will receive updates for team: {actual_team}{note}"
+    except Exception as e:
+        return f"❌ *Error*\n\n🔍 Error subscribing: {str(e)}"
+    finally:
+        conn.close()
 
 @app.tool("my_team_stats")
 async def my_team_stats_tool(user_id: str) -> str:
@@ -361,19 +395,21 @@ def get_team_stats(team_name: str) -> Dict[str, Any]:
     cursor = conn.cursor()
     
     try:
+        # Fuzzy match team name
+        cursor.execute('SELECT DISTINCT team_name FROM leaderboard')
+        all_teams = [row[0] for row in cursor.fetchall()]
+        match = difflib.get_close_matches(team_name, all_teams, n=1, cutoff=0.6)
+        actual_team = match[0] if match else team_name
         # Get team data
         cursor.execute('''
             SELECT team_name, server_id, submitted_at, visitors, unique_visitors, team_size, last_updated
             FROM leaderboard 
             WHERE team_name = ?
             ORDER BY visitors DESC
-        ''', (team_name,))
-        
+        ''', (actual_team,))
         rows = cursor.fetchall()
-        
         if not rows:
             return {"error": f"Team '{team_name}' not found"}
-        
         # Process data
         team_data = {
             "team_name": rows[0][0],
@@ -382,7 +418,6 @@ def get_team_stats(team_name: str) -> Dict[str, Any]:
             "last_updated": rows[0][6],
             "submissions": []
         }
-        
         for row in rows:
             submission = {
                 "server_id": row[1],
@@ -390,9 +425,10 @@ def get_team_stats(team_name: str) -> Dict[str, Any]:
                 "visitors": row[3]
             }
             team_data["submissions"].append(submission)
-        
+        # If fuzzy match was used, add a note
+        if actual_team != team_name:
+            team_data["fuzzy_note"] = f"(Showing results for '{actual_team}')"
         return team_data
-        
     except Exception as e:
         logger.error(f"Error getting team stats: {e}")
         return {"error": f"Database error: {str(e)}"}
@@ -588,7 +624,6 @@ async def get_leaderboard_stats_tool(team_name: str) -> str:
         return "❌ *Error*\n\n📝 Team name is required"
     
     team_stats = get_team_stats(team_name)
-    
     # Return formatted text based on result
     if "error" in team_stats:
         return f"❌ *Team Not Found*\n\n🔍 {team_stats['error']}"
@@ -596,7 +631,6 @@ async def get_leaderboard_stats_tool(team_name: str) -> str:
         # Get team rank
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        
         try:
             cursor.execute('''
                 SELECT COUNT(*) + 1 as rank
@@ -611,24 +645,22 @@ async def get_leaderboard_stats_tool(team_name: str) -> str:
                     WHERE team_name = ? 
                     LIMIT 1
                 )
-            ''', (team_name,))
-            
+            ''', (team_stats["team_name"],))
             rank_row = cursor.fetchone()
             rank = rank_row[0] if rank_row else "N/A"
-            
         except Exception:
             rank = "N/A"
         finally:
             conn.close()
-        
-
     # Add unique visitors info
     unique_visitors = team_stats.get("unique_visitors", "N/A")
-    safe_team_name = sanitize_response(team_name)
+    safe_team_name = sanitize_response(team_stats["team_name"])
     result = f"🏆 *Team Rank Information*\n\n"
     result += f"📊 Team: {safe_team_name}\n"
     result += f"🥇 Current Rank: #{rank}\n"
     result += f"👤 Unique Visitors: {unique_visitors}\n"
+    if "fuzzy_note" in team_stats:
+        result += f"\n_{team_stats['fuzzy_note']}_\n"
     return result
 
 @app.tool("refresh_leaderboard")
