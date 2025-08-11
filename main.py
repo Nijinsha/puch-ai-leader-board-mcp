@@ -11,7 +11,11 @@ def sanitize_response(text: str) -> str:
     # Remove angle brackets, curly braces, and other unwanted symbols
     # Unicode emoji range: [\U0001F300-\U0001FAFF]
     # This regex keeps emojis, alphanumerics, whitespace, and common punctuation
-    return re.sub(r"[<>\{\}\^`$|~]", "", text)
+    return re.sub(r"[<>{}\^`$|~]", "", text)
+
+# Helper to append powered by link
+def add_powered_by(text: str) -> str:
+    return f"{text}\n\n_Powered by https://puch.ai/mcp/4I2A7Z5bWA_"
 #!/usr/bin/env python3
 """MCP server with validate and bearer token functions using FastMCP."""
 
@@ -84,7 +88,7 @@ async def compare_teams_tool(team_names: str) -> str:
             result += f"*{team_name}* {bar}\n   👥 Team Size: {team_size}\n   👀 Unique Visitors: {visitors:,}\n\n"
         if notes:
             result += "_Fuzzy matched: " + ", ".join(notes) + "_\n"
-        return result
+        return add_powered_by(result)
     except Exception as e:
         return f"❌ *Error*\n\n🔍 Error comparing teams: {str(e)}"
     finally:
@@ -107,21 +111,21 @@ async def milestone_alert_tool(team_name: str) -> str:
         cursor.execute('''SELECT unique_visitors FROM leaderboard WHERE team_name = ? ORDER BY unique_visitors DESC LIMIT 1''', (actual_team,))
         row = cursor.fetchone()
         if not row:
-            return f"❌ *Team Not Found*\n\n🔍 No data for team: {team_name}"
+            return add_powered_by(f"❌ *Team Not Found*\n\n🔍 No data for team: {team_name}")
         visitors = row[0]
         reached = [m for m in MILESTONES if visitors >= m]
         note = f"\n_(Showing results for '{actual_team}')_" if actual_team != team_name else ""
         if not reached:
             next_milestone = min([m for m in MILESTONES if m > visitors], default=None)
             if next_milestone:
-                return f"⏳ *Milestone Alert*\n\n*{actual_team}* has {visitors:,} unique visitors.\nNext milestone: {next_milestone:,} visitors.{note}"
+                return add_powered_by(f"⏳ *Milestone Alert*\n\n*{actual_team}* has {visitors:,} unique visitors.\nNext milestone: {next_milestone:,} visitors.{note}")
             else:
-                return f"*{actual_team}* has {visitors:,} unique visitors.{note}"
+                return add_powered_by(f"*{actual_team}* has {visitors:,} unique visitors.{note}")
         else:
             last = max(reached)
-            return f"🎉 *Milestone Reached!*\n\n*{actual_team}* has crossed {last:,} unique visitors!\nCurrent: {visitors:,} visitors.{note}"
+            return add_powered_by(f"🎉 *Milestone Reached!*\n\n*{actual_team}* has crossed {last:,} unique visitors!\nCurrent: {visitors:,} visitors.{note}")
     except Exception as e:
-        return f"❌ *Error*\n\n🔍 Error checking milestone: {str(e)}"
+        return add_powered_by(f"❌ *Error*\n\n🔍 Error checking milestone: {str(e)}")
     finally:
         conn.close()
 
@@ -143,9 +147,9 @@ async def subscribe_team_tool(user_id: str, team_name: str) -> str:
         actual_team = match[0] if match else team_name
         subscriptions[user_id] = actual_team
         note = f" (subscribed to '{actual_team}')" if actual_team != team_name else ""
-        return f"🔔 *Subscribed!*\n\nUser {user_id} will receive updates for team: {actual_team}{note}"
+        return add_powered_by(f"🔔 *Subscribed!*\n\nUser {user_id} will receive updates for team: {actual_team}{note}")
     except Exception as e:
-        return f"❌ *Error*\n\n🔍 Error subscribing: {str(e)}"
+        return add_powered_by(f"❌ *Error*\n\n🔍 Error subscribing: {str(e)}")
     finally:
         conn.close()
 
@@ -154,7 +158,7 @@ async def my_team_stats_tool(user_id: str) -> str:
     """Get personalized stats for the user's subscribed team."""
     team_name = subscriptions.get(user_id)
     if not team_name:
-        return "❌ *Not Subscribed*\n\nYou are not subscribed to any team. Use 'subscribe_team' to subscribe."
+        return add_powered_by("❌ *Not Subscribed*\n\nYou are not subscribed to any team. Use 'subscribe_team' to subscribe.")
     return await get_leaderboard_stats_tool(team_name)
 
 # --- Tool: Top Movers ---
@@ -180,7 +184,7 @@ async def top_movers_tool() -> str:
     current_ranks = get_current_ranks()
     if not previous_ranks:
         previous_ranks = current_ranks.copy()
-        return "⏳ *Top Movers*\n\nTracking started. Please check again after the next update."
+        return add_powered_by("⏳ *Top Movers*\n\nTracking started. Please check again after the next update.")
     # Calculate movement
     movement = []
     for team, curr_rank in current_ranks.items():
@@ -198,7 +202,7 @@ async def top_movers_tool() -> str:
             arrow = "⬆️" if change > 0 else "⬇️"
             result += f"{arrow} *{team}* ({abs(change)} places)\n"
     previous_ranks = current_ranks.copy()
-    return result
+    return add_powered_by(result)
 # Custom leaderboard count with emoji bar chart
 @app.tool("top_n_leaderboard")
 async def top_n_leaderboard_tool(n: int = 5) -> str:
@@ -215,29 +219,31 @@ async def top_n_leaderboard_tool(n: int = 5) -> str:
         ''', (n,))
         rows = cursor.fetchall()
         if not rows:
-            return "📊 *No Leaderboard Data*\n\n⏳ Data is being fetched from Puch AI API\n\n🔄 Please wait for the initial sync to complete"
+            return add_powered_by("📊 *No Leaderboard Data*\n\n⏳ Data is being fetched from Puch AI API\n\n🔄 Please wait for the initial sync to complete")
         max_visitors = max(row[1] for row in rows) if rows else 1
         result = f"🏆 *Puch AI Hackathon Leaderboard - Top {n}*\n\n"
         for i, row in enumerate(rows, 1):
             team_name = row[0]
             visitors = row[1]
             team_size = row[2]
-            # Add medal emojis for top 3
+            # Add medal emojis for top 3, then keycap emojis for 4-9, then fallback for 10+
             if i == 1:
                 medal = "🥇"
             elif i == 2:
                 medal = "🥈"
             elif i == 3:
                 medal = "🥉"
+            elif 4 <= i <= 9:
+                medal = f"{i}\u20E3"  # keycap digit emoji
             else:
-                medal = f"{i}️⃣"
+                medal = f"{i}."
             bar = emoji_bar(visitors, max_visitors)
             result += f"{medal} *{team_name}* {bar}\n"
             result += f"   👥 Team Size: {team_size}\n"
             result += f"   👀 Unique Visitors: {visitors:,}\n\n"
-        return result
+        return add_powered_by(result)
     except Exception as e:
-        return f"❌ *Error*\n\n🔍 Error retrieving leaderboard: {str(e)}"
+        return add_powered_by(f"❌ *Error*\n\n🔍 Error retrieving leaderboard: {str(e)}")
     finally:
         conn.close()
 
@@ -621,12 +627,11 @@ async def top_10_leaderboard_tool() -> str:
 async def get_leaderboard_stats_tool(team_name: str) -> str:
     """Get Puch AI leaderboard statistics for a specific team."""
     if not team_name:
-        return "❌ *Error*\n\n📝 Team name is required"
-    
+        return add_powered_by("❌ *Error*\n\n📝 Team name is required")
     team_stats = get_team_stats(team_name)
     # Return formatted text based on result
     if "error" in team_stats:
-        return f"❌ *Team Not Found*\n\n🔍 {team_stats['error']}"
+        return add_powered_by(f"❌ *Team Not Found*\n\n🔍 {team_stats['error']}")
     else:
         # Get team rank
         conn = sqlite3.connect(DB_PATH)
@@ -661,7 +666,7 @@ async def get_leaderboard_stats_tool(team_name: str) -> str:
     result += f"👤 Unique Visitors: {unique_visitors}\n"
     if "fuzzy_note" in team_stats:
         result += f"\n_{team_stats['fuzzy_note']}_\n"
-    return result
+    return add_powered_by(result)
 
 @app.tool("refresh_leaderboard")
 async def refresh_leaderboard_tool() -> str:
