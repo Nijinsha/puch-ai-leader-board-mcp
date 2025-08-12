@@ -410,11 +410,7 @@ async def top_n_leaderboard_tool(n: int = 5) -> str:
                 data = await resp.json()
         leaderboard = data.get("leaderboard", [])
         if not leaderboard:
-            return {
-                "status": "error",
-                "message": "No data available",
-                "powered_by": "https://puch.ai/mcp/4I2A7Z5bWA"
-            }
+            return "❌ *Error*\n\nNo data available"
             
         teams_data = []
         for i, team in enumerate(leaderboard[:n], 1):
@@ -804,7 +800,7 @@ async def get_leaderboard_stats_tool(team_name: str) -> str:
         actual_team = match[0] if match else team_name
         team = next((t for t in leaderboard if t.get("team_name") == actual_team), None)
         if not team:
-            return add_powered_by(f"❌ *Team Not Found*\n\n🔍 No data for team: {team_name}")
+            return f"❌ *Team Not Found*\n\n🔍 No data for team: {team_name}"
         unique_visitors = team.get("unique_visitors", 0)
         submissions = team.get("submissions", [])
         total_invocations = sum(sub.get("mcp_metrics", {}).get("invocations_total", 0) for sub in submissions)
@@ -820,10 +816,12 @@ async def get_leaderboard_stats_tool(team_name: str) -> str:
         else:
             medal = f"{rank}."
         safe_team_name = sanitize_response(actual_team)
-        result = f"{medal} {safe_team_name}\n   👀 Unique Visitors: {unique_visitors}\n   ⚡️ Invocations: {total_invocations}\n"
-        return add_powered_by(result)
+        result = f"{medal} *{safe_team_name}*\n"
+        result += f"   👀 Unique Visitors: {unique_visitors}\n"
+        result += f"   ⚡️ Invocations: {total_invocations}"
+        return result
     except Exception as e:
-        return add_powered_by(f"❌ *Error*\n\n🔍 Error retrieving team stats: {str(e)}")
+        return f"❌ *Error*\n\n🔍 Error retrieving team stats: {str(e)}"
 
 @app.tool("refresh_leaderboard")
 async def refresh_leaderboard_tool() -> str:
