@@ -93,11 +93,7 @@ async def compare_teams_tool(team_names: str) -> str:
     import difflib
     names = [name.strip() for name in team_names.split(",") if name.strip()]
     if len(names) < 2:
-        error_response = {
-            "status": "error",
-            "message": "Please provide at least two team names separated by commas"
-        }
-        return json.dumps(error_response)
+        return "❌ *Error*\n\nPlease provide at least two team names separated by commas"
     try:
         async with aiohttp.ClientSession() as session:
             url = "https://api.puch.ai/hackathon-leaderboard?page=1&limit=20"
@@ -146,13 +142,18 @@ async def compare_teams_tool(team_names: str) -> str:
                 }
             })
         
-        response = {
-            "status": "success",
-            "teams": teams_data,
-            "notes": notes if notes else [],
-            "powered_by": "https://puch.ai/mcp/4I2A7Z5bWA"
-        }
-        return json.dumps(response)
+        result = "📊 *Team Comparison*\n\n"
+        for team_data in teams_data:
+            result += f"{team_data['medal']} {team_data['name']}\n"
+            result += f"   👀 Visitors: {team_data['metrics']['visitors']}\n"
+            result += f"   ⚡️ Invocations: {team_data['metrics']['invocations']}\n\n"
+        
+        if notes:
+            result += "\n📝 *Notes:*\n"
+            for note in notes:
+                result += f"- {note}\n"
+        
+        return result
     except Exception as e:
         error_response = {
             "status": "error",
@@ -206,11 +207,7 @@ async def milestone_alert_tool(team_name: str) -> str:
         actual_team = match[0] if match else team_name
         team = next((t for t in leaderboard if t.get("team_name") == actual_team), None)
         if not team:
-            error_response = {
-                "status": "error",
-                "message": f"No data found for team: {team_name}"
-            }
-            return json.dumps(error_response)
+            return f"❌ *Team Not Found*\n\n🔍 No data for team: {team_name}"
         unique_visitors = team.get("unique_visitors", 0)
         submissions = team.get("submissions", [])
         total_invocations = sum(sub.get("mcp_metrics", {}).get("invocations_total", 0) for sub in submissions)
@@ -225,19 +222,18 @@ async def milestone_alert_tool(team_name: str) -> str:
             medal = f"{rank}\u20E3"
         else:
             medal = f"{rank}."
-        response = {
-            "status": "success",
-            "team": {
-                "name": actual_team,
-                "rank": rank,
-                "medal": medal,
-                "metrics": {
-                    "visitors": unique_visitors,
-                    "invocations": total_invocations
-                }
-            }
-        }
-        return json.dumps(response)
+        result = f"{medal} *{actual_team}*\n"
+        result += f"   👀 Unique Visitors: {unique_visitors}\n"
+        result += f"   ⚡️ Total Invocations: {total_invocations}\n"
+        
+        # Add milestone message if applicable
+        next_milestone = next((m for m in MILESTONES if m > unique_visitors), None)
+        if next_milestone:
+            visitors_needed = next_milestone - unique_visitors
+            result += f"\n🎯 *Next Milestone:* {next_milestone:,} visitors"
+            result += f"\n📈 Need {visitors_needed:,} more visitors!"
+        
+        return result
     except Exception as e:
         error_response = {
             "status": "error",
@@ -461,21 +457,28 @@ async def top_n_leaderboard_tool(n: int = 5) -> str:
             teams_data.append(team_data)
             
         # Create the final structured response
-        response = {
-            "status": "success",
-            "total_teams": len(teams_data),
-            "teams": teams_data
-        }
+        result = "🏆 *Top Teams*\n\n"
+        for team_data in teams_data:
+            result += f"{team_data['medal']} *{team_data['name']}*"
+            if team_data['server']['name']:
+                result += f" [Server: {team_data['server']['name']}]\n"
+            else:
+                result += "\n"
+                
+            result += f"   👀 {team_data['metrics']['visitors']:,} visitors\n"
+            result += f"   ⚡️ {team_data['metrics']['invocations']:,} invocations\n"
+            
+            if team_data['tools']:
+                result += f"   🛠️ Tools: {', '.join(team_data['tools'])}\n"
+            
+            if team_data['server']['description']:
+                result += f"   ℹ️ About: {team_data['server']['description']}\n"
+            
+            result += "\n"
         
-        # Convert dictionary to JSON string
-        return json.dumps(response)
+        return result
     except Exception as e:
-        error_response = {
-            "status": "error",
-            "message": f"Error retrieving leaderboard: {str(e)}",
-            "powered_by": "https://puch.ai/mcp/4I2A7Z5bWA"
-        }
-        return json.dumps(error_response)
+        return f"❌ *Error*\n\n🔍 Error retrieving leaderboard: {str(e)}"
 
 # Store for bearer tokens
 bearer_tokens: Dict[str, str] = {}
@@ -781,7 +784,7 @@ async def health_check_tool() -> str:
 async def get_leaderboard_stats_tool(team_name: str) -> str:
     """Get Puch AI leaderboard statistics for a specific team."""
     if not team_name:
-        return add_powered_by("❌ *Error*\n\n📝 Team name is required")
+        return "❌ *Error*\n\n📝 Team name is required"
     import aiohttp
     try:
         async with aiohttp.ClientSession() as session:
