@@ -49,12 +49,6 @@ MY_NUMBER = os.getenv("MY_NUMBER", "Unknown")
 
 app = FastMCP("puch-leaderboard-mcp")
 
-# Simulate onConnect: send leaderboard on connect
-@app.tool("on_connect", description="Runs automatically when user connects to MCP")
-async def on_connect_tool(ctx) -> str:
-    """Runs automatically when user connects to MCP. Sends the top 5 leaderboard as a welcome message."""
-    leaderboard = await top_n_leaderboard_tool(5)
-    return leaderboard
 # Emoji bar chart helper
 def emoji_bar(value, max_value, length=10, emoji='🟩'):
     if max_value == 0:
@@ -212,29 +206,47 @@ async def top_movers_tool() -> str:
             result += f"{arrow} *{team}* ({abs(change)} places)\n"
     previous_ranks = current_ranks.copy()
     return add_powered_by(result)
-# Custom leaderboard count with emoji bar chart
+# Enhanced leaderboard with invocations and MCP metrics
 @app.tool("top_n_leaderboard")
 async def top_n_leaderboard_tool(n: int = 5) -> str:
-    """Get top N teams from the Puch AI leaderboard with emoji bar chart."""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
+    """Get top N teams from the Puch AI leaderboard with emoji bar chart and invocation stats."""
+    import aiohttp
     try:
-        cursor.execute('''
-            SELECT team_name, unique_visitors, team_size
-            FROM leaderboard 
-            GROUP BY team_name 
-            ORDER BY unique_visitors DESC 
-            LIMIT ?
-        ''', (n,))
-        rows = cursor.fetchall()
-        if not rows:
+        async with aiohttp.ClientSession() as session:
+            url = "https://api.puch.ai/hackathon-leaderboard?page=1&limit=20"
+            headers = {
+                'User-Agent': 'Mozilla/5.0',
+                'Accept': 'application/json',
+            }
+            async with session.get(url, headers=headers) as resp:
+                if resp.status != 200:
+                    return add_powered_by("❌ *Error*\n\nCould not fetch leaderboard data from API.")
+                data = await resp.json()
+        leaderboard = data.get("leaderboard", [])
+        if not leaderboard:
             return add_powered_by("📊 *No Leaderboard Data*\n\n⏳ Data is being fetched from Puch AI API\n\n🔄 Please wait for the initial sync to complete")
-        max_visitors = max(row[1] for row in rows) if rows else 1
+        max_visitors = max(team.get("unique_visitors", 0) for team in leaderboard[:n]) or 1
         result = f"🏆 *Puch AI Hackathon Leaderboard - Top {n}*\n\n"
-        for i, row in enumerate(rows, 1):
-            team_name = row[0]
-            visitors = row[1]
-            team_size = row[2]
+        for i, team in enumerate(leaderboard[:n], 1):
+            team_name = team.get("team_name", "?")
+            visitors = team.get("unique_visitors", 0)
+            team_size = team.get("team_size", 0)
+            submissions = team.get("submissions", [])
+            # Aggregate invocations and MCP metrics
+            total_invocations = 0
+            tool_spread = []
+            last_invoked = None
+            for sub in submissions:
+                mcp = sub.get("mcp_metrics", {})
+                total_invocations += mcp.get("invocations_total", 0)
+                # Collect tool spread info
+                if mcp.get("tool_spread_coef"):
+                    for tool, coef in mcp["tool_spread_coef"].items():
+                        tool_spread.append(f"{tool}: {coef:.2f}")
+                # Find latest invocation
+                if mcp.get("last_invoked"):
+                    if not last_invoked or mcp["last_invoked"] > last_invoked:
+                        last_invoked = mcp["last_invoked"]
             # Add medal emojis for top 3, then keycap emojis for 4-9, then fallback for 10+
             if i == 1:
                 medal = "🥇"
@@ -249,12 +261,16 @@ async def top_n_leaderboard_tool(n: int = 5) -> str:
             bar = emoji_bar(visitors, max_visitors)
             result += f"{medal} *{team_name}* {bar}\n"
             result += f"   👥 Team Size: {team_size}\n"
-            result += f"   👀 Unique Visitors: {visitors:,}\n\n"
+            result += f"   👀 Unique Visitors: {visitors:,}\n"
+            result += f"   ⚡️ Invocations: {total_invocations:,}\n"
+            if tool_spread:
+                result += f"   🛠️ Tool Spread: {', '.join(tool_spread)}\n"
+            if last_invoked:
+                result += f"   ⏱️ Last Invoked: {last_invoked}\n"
+            result += "\n"
         return add_powered_by(result)
     except Exception as e:
         return add_powered_by(f"❌ *Error*\n\n🔍 Error retrieving leaderboard: {str(e)}")
-    finally:
-        conn.close()
 
 # Store for bearer tokens
 bearer_tokens: Dict[str, str] = {}
