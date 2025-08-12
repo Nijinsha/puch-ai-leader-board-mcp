@@ -96,25 +96,9 @@ async def compare_teams_tool(team_names: str) -> str:
             visitors = team.get("unique_visitors", 0)
             team_size = team.get("team_size", 0)
             submissions = team.get("submissions", [])
-            total_invocations = 0
-            tool_spread = []
-            last_invoked = None
-            for sub in submissions:
-                mcp = sub.get("mcp_metrics", {})
-                total_invocations += mcp.get("invocations_total", 0)
-                if mcp.get("tool_spread_coef"):
-                    for tool, coef in mcp["tool_spread_coef"].items():
-                        tool_spread.append(f"{tool}: {coef:.2f}")
-                if mcp.get("last_invoked"):
-                    if not last_invoked or mcp["last_invoked"] > last_invoked:
-                        last_invoked = mcp["last_invoked"]
+            total_invocations = sum(sub.get("mcp_metrics", {}).get("invocations_total", 0) for sub in submissions)
             bar = emoji_bar(visitors, max_visitors)
-            result += f"*{team_name}* {bar}\n   👥 Team Size: {team_size}\n   👀 Unique Visitors: {visitors:,}\n   ⚡️ Invocations: {total_invocations}\n"
-            if tool_spread:
-                result += f"   🛠️ Tool Spread: {', '.join(tool_spread)}\n"
-            if last_invoked:
-                result += f"   ⏱️ Last Invoked: {last_invoked}\n"
-            result += "\n"
+            result += f"*{team_name}* {bar}\n   👥 Team Size: {team_size}\n   👀 Unique Visitors: {visitors:,}\n   ⚡️ Invocations: {total_invocations}\n\n"
         if notes:
             result += "_Fuzzy matched: " + ", ".join(notes) + "_\n"
         return add_powered_by(result)
@@ -150,25 +134,10 @@ async def milestone_alert_tool(team_name: str) -> str:
         unique_visitors = team.get("unique_visitors", 0)
         team_size = team.get("team_size", 0)
         submissions = team.get("submissions", [])
-        total_invocations = 0
-        tool_spread = []
-        last_invoked = None
-        for sub in submissions:
-            mcp = sub.get("mcp_metrics", {})
-            total_invocations += mcp.get("invocations_total", 0)
-            if mcp.get("tool_spread_coef"):
-                for tool, coef in mcp["tool_spread_coef"].items():
-                    tool_spread.append(f"{tool}: {coef:.2f}")
-            if mcp.get("last_invoked"):
-                if not last_invoked or mcp["last_invoked"] > last_invoked:
-                    last_invoked = mcp["last_invoked"]
+        total_invocations = sum(sub.get("mcp_metrics", {}).get("invocations_total", 0) for sub in submissions)
         reached = [m for m in MILESTONES if unique_visitors >= m]
         note = f"\n_(Showing results for '{actual_team}')_" if actual_team != team_name else ""
-        result = f"*{actual_team}* has {unique_visitors:,} unique visitors.\n👥 Team Size: {team_size}\n⚡️ Invocations: {total_invocations}\n"
-        if tool_spread:
-            result += f"🛠️ Tool Spread: {', '.join(tool_spread)}\n"
-        if last_invoked:
-            result += f"⏱️ Last Invoked: {last_invoked}\n"
+        result = f"*{actual_team}*\n👥 Team Size: {team_size}\n👀 Unique Visitors: {unique_visitors:,}\n⚡️ Invocations: {total_invocations}\n"
         if not reached:
             next_milestone = min([m for m in MILESTONES if m > unique_visitors], default=None)
             if next_milestone:
@@ -280,22 +249,7 @@ async def top_n_leaderboard_tool(n: int = 5) -> str:
             visitors = team.get("unique_visitors", 0)
             team_size = team.get("team_size", 0)
             submissions = team.get("submissions", [])
-            # Aggregate invocations and MCP metrics
-            total_invocations = 0
-            tool_spread = []
-            last_invoked = None
-            for sub in submissions:
-                mcp = sub.get("mcp_metrics", {})
-                total_invocations += mcp.get("invocations_total", 0)
-                # Collect tool spread info
-                if mcp.get("tool_spread_coef"):
-                    for tool, coef in mcp["tool_spread_coef"].items():
-                        tool_spread.append(f"{tool}: {coef:.2f}")
-                # Find latest invocation
-                if mcp.get("last_invoked"):
-                    if not last_invoked or mcp["last_invoked"] > last_invoked:
-                        last_invoked = mcp["last_invoked"]
-            # Add medal emojis for top 3, then keycap emojis for 4-9, then fallback for 10+
+            total_invocations = sum(sub.get("mcp_metrics", {}).get("invocations_total", 0) for sub in submissions)
             if i == 1:
                 medal = "🥇"
             elif i == 2:
@@ -310,12 +264,7 @@ async def top_n_leaderboard_tool(n: int = 5) -> str:
             result += f"{medal} *{team_name}* {bar}\n"
             result += f"   👥 Team Size: {team_size}\n"
             result += f"   👀 Unique Visitors: {visitors:,}\n"
-            result += f"   ⚡️ Invocations: {total_invocations:,}\n"
-            if tool_spread:
-                result += f"   🛠️ Tool Spread: {', '.join(tool_spread)}\n"
-            if last_invoked:
-                result += f"   ⏱️ Last Invoked: {last_invoked}\n"
-            result += "\n"
+            result += f"   ⚡️ Invocations: {total_invocations:,}\n\n"
         return add_powered_by(result)
     except Exception as e:
         return add_powered_by(f"❌ *Error*\n\n🔍 Error retrieving leaderboard: {str(e)}")
@@ -724,18 +673,7 @@ async def get_leaderboard_stats_tool(team_name: str) -> str:
         unique_visitors = team.get("unique_visitors", 0)
         team_size = team.get("team_size", 0)
         submissions = team.get("submissions", [])
-        total_invocations = 0
-        tool_spread = []
-        last_invoked = None
-        for sub in submissions:
-            mcp = sub.get("mcp_metrics", {})
-            total_invocations += mcp.get("invocations_total", 0)
-            if mcp.get("tool_spread_coef"):
-                for tool, coef in mcp["tool_spread_coef"].items():
-                    tool_spread.append(f"{tool}: {coef:.2f}")
-            if mcp.get("last_invoked"):
-                if not last_invoked or mcp["last_invoked"] > last_invoked:
-                    last_invoked = mcp["last_invoked"]
+        total_invocations = sum(sub.get("mcp_metrics", {}).get("invocations_total", 0) for sub in submissions)
         rank = all_teams.index(actual_team) + 1 if actual_team in all_teams else "N/A"
         safe_team_name = sanitize_response(actual_team)
         result = f"🏆 *Team Rank Information*\n\n"
@@ -744,10 +682,6 @@ async def get_leaderboard_stats_tool(team_name: str) -> str:
         result += f"👤 Unique Visitors: {unique_visitors}\n"
         result += f"👥 Team Size: {team_size}\n"
         result += f"⚡️ Invocations: {total_invocations}\n"
-        if tool_spread:
-            result += f"🛠️ Tool Spread: {', '.join(tool_spread)}\n"
-        if last_invoked:
-            result += f"⏱️ Last Invoked: {last_invoked}\n"
         if actual_team != team_name:
             result += f"\n_(Showing results for '{actual_team}')_\n"
         return add_powered_by(result)
