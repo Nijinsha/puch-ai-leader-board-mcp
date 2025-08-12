@@ -247,9 +247,9 @@ async def top_n_leaderboard_tool(n: int = 5) -> str:
         for i, team in enumerate(leaderboard[:n], 1):
             team_name = team.get("team_name", "?")
             visitors = team.get("unique_visitors", 0)
-            team_size = team.get("team_size", 0)
             submissions = team.get("submissions", [])
             total_invocations = sum(sub.get("mcp_metrics", {}).get("invocations_total", 0) for sub in submissions)
+            rank = i
             if i == 1:
                 medal = "🥇"
             elif i == 2:
@@ -262,7 +262,7 @@ async def top_n_leaderboard_tool(n: int = 5) -> str:
                 medal = f"{i}."
             bar = emoji_bar(visitors, max_visitors)
             result += f"{medal} *{team_name}* {bar}\n"
-            result += f"   👥 Team Size: {team_size}\n"
+            result += f"   🏅 Rank: {rank}\n"
             result += f"   👀 Unique Visitors: {visitors:,}\n"
             result += f"   ⚡️ Invocations: {total_invocations:,}\n\n"
         return add_powered_by(result)
