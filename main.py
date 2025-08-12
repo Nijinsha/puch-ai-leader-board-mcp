@@ -79,13 +79,28 @@ async def about() -> dict:
 
 # --- Tool: Team Comparison ---
 @app.tool("compare_teams")
-async def compare_teams_tool(team_names: str) -> str:
-    """Compare two or more teams side-by-side by unique visitors and team size."""
+async def compare_teams_tool(team_names: str) -> Dict[str, Any]:
+    """Compare two or more teams side-by-side by unique visitors and team size.
+    
+    Returns:
+        Dict[str, Any]: Dictionary containing comparison data with structure:
+        {
+            "status": "success" | "error",
+            "message": str,  # Only for error responses
+            "teams": List[Dict[str, Any]],  # List of team comparisons
+            "notes": List[str],  # Fuzzy matching notes
+            "powered_by": str
+        }
+    """
     import aiohttp
     import difflib
     names = [name.strip() for name in team_names.split(",") if name.strip()]
     if len(names) < 2:
-        return "❌ *Error*\n\nPlease provide at least two team names separated by commas."
+        return {
+            "status": "error",
+            "message": "Please provide at least two team names separated by commas",
+            "powered_by": "https://puch.ai/mcp/4I2A7Z5bWA"
+        }
     try:
         async with aiohttp.ClientSession() as session:
             url = "https://api.puch.ai/hackathon-leaderboard?page=1&limit=20"
@@ -109,28 +124,36 @@ async def compare_teams_tool(team_names: str) -> str:
                 notes.append(f"'{name}'→'{actual}'")
         teams = [t for t in leaderboard if t.get("team_name") in matched_names]
         if not teams:
-            return add_powered_by("❌ *Error*\n\nNo data found for the given teams.")
-        max_visitors = max(t.get("unique_visitors", 0) for t in teams) or 1
-        result = "🤝 *Team Comparison*\n\n"
+            return {
+                "status": "error",
+                "message": "No data found for the given teams",
+                "powered_by": "https://puch.ai/mcp/4I2A7Z5bWA"
+            }
+
+        teams_data = []
         for idx, team in enumerate(teams, 1):
             team_name = team.get("team_name", "?")
             visitors = team.get("unique_visitors", 0)
             submissions = team.get("submissions", [])
             total_invocations = sum(sub.get("mcp_metrics", {}).get("invocations_total", 0) for sub in submissions)
-            if idx == 1:
-                medal = "🥇"
-            elif idx == 2:
-                medal = "🥈"
-            elif idx == 3:
-                medal = "🥉"
-            elif 4 <= idx <= 9:
-                medal = f"{idx}\u20E3"
-            else:
-                medal = f"{idx}."
-            result += f"{medal} {team_name}\n   👀 Unique Visitors: {visitors:,}\n   ⚡️ Invocations: {total_invocations}\n\n"
-        if notes:
-            result += "_Fuzzy matched: " + ", ".join(notes) + "_\n"
-        return add_powered_by(result)
+            medal = "🥇" if idx == 1 else "🥈" if idx == 2 else "🥉" if idx == 3 else f"{idx}\u20E3" if 4 <= idx <= 9 else f"{idx}."
+            
+            teams_data.append({
+                "rank": idx,
+                "medal": medal,
+                "name": team_name,
+                "metrics": {
+                    "visitors": visitors,
+                    "invocations": total_invocations
+                }
+            })
+        
+        return {
+            "status": "success",
+            "teams": teams_data,
+            "notes": notes if notes else [],
+            "powered_by": "https://puch.ai/mcp/4I2A7Z5bWA"
+        }
     except Exception as e:
         return add_powered_by(f"❌ *Error*\n\n🔍 Error comparing teams: {str(e)}")
 
@@ -138,8 +161,26 @@ async def compare_teams_tool(team_names: str) -> str:
 MILESTONES = [1000, 5000, 10000, 25000, 50000]
 
 @app.tool("milestone_alert")
-async def milestone_alert_tool(team_name: str) -> str:
-    """Notify if a team has reached a visitor milestone."""
+async def milestone_alert_tool(team_name: str) -> Dict[str, Any]:
+    """Notify if a team has reached a visitor milestone.
+    
+    Returns:
+        Dict[str, Any]: Dictionary containing milestone data with structure:
+        {
+            "status": "success" | "error",
+            "message": str,  # Error message if status is error
+            "team": {
+                "name": str,
+                "rank": int,
+                "medal": str,
+                "metrics": {
+                    "visitors": int,
+                    "invocations": int
+                }
+            },
+            "powered_by": str
+        }
+    """
     import aiohttp
     import difflib
     try:
@@ -253,38 +294,62 @@ async def top_movers_tool() -> str:
             result += f"{arrow} *{team}* ({abs(change)} places)\n"
     previous_ranks = current_ranks.copy()
     return add_powered_by(result)
-# Enhanced leaderboard with invocations and MCP metrics
+# Enhanced leaderboard with server info and metrics
 @app.tool(
-    "top_n_leaderboard",
+    name="top_n_leaderboard",
     description="""
 MCP Tool: Top N Leaderboard
 
-Use case: Retrieve the top N teams from the Puch AI Hackathon leaderboard, ranked by unique visitors. 
-This tool is designed for leaderboard display, comparison, and analytics in chatbots, LLMs, and WhatsApp integrations.
+Use case: Get top N teams with server info, visitors, and invocations.
 
-Request Parameters:
-    - n (int, optional): Number of top teams to return. Default is 5.
+Request:
+- n (int): Number of teams (default: 5)
 
-Response Format:
-    - For each team, returns:
-        - Medal/rank emoji (🥇, 🥈, 🥉, 4️⃣, ...)
-        - Team name
-        - Unique visitors (int)
-        - Total invocations (int, summed across all submissions)
-    - Minimal, WhatsApp/LLM-friendly output. No extra stats.
+Response Format (JSON-like):
+- Rank emoji + Team name
+- Visitors count
+- Invocations total
+- Server name (if available)
+- Server description preview (first 50 chars)
+- Tools used
 
-Example Response:
-🥇 ModelMinds
-     👀 Unique Visitors: 1,410
-     ⚡️ Invocations: 282
-
-🥈 InfiniteCoffee
-     👀 Unique Visitors: 1,047
-     ⚡️ Invocations: 263
-"""
+Example:
+🥇 TeamName [Server: VibeServer]
+   👀 1410 visitors | ⚡️ 282 calls
+   🛠️ Tools: tool1, tool2
+   � About: AI-powered mood planner and recommendations"""
 )
-async def top_n_leaderboard_tool(n: int = 5) -> str:
-    """Get top N teams from the Puch AI leaderboard with emoji bar chart and invocation stats."""
+async def top_n_leaderboard_tool(n: int = 5) -> Dict[str, Any]:
+    """Get top N teams with server info, visitors, and tool usage stats.
+    
+    Args:
+        n: Number of teams to return (default: 5)
+    
+    Returns:
+        Dict[str, Any]: Dictionary containing team data with structure:
+        {
+            "status": str,  # "success" or "error"
+            "total_teams": int,
+            "teams": List[Dict[str, Any]],  # List of team data dictionaries
+            "powered_by": str
+        }
+
+        Team data dictionary structure:
+        {
+            "rank": int,
+            "medal": str,
+            "name": str,
+            "server": {
+                "name": str,
+                "description": str
+            },
+            "metrics": {
+                "visitors": int,
+                "invocations": int
+            },
+            "tools": List[str]
+        }
+    """
     import aiohttp
     try:
         async with aiohttp.ClientSession() as session:
@@ -299,33 +364,71 @@ async def top_n_leaderboard_tool(n: int = 5) -> str:
                 data = await resp.json()
         leaderboard = data.get("leaderboard", [])
         if not leaderboard:
-            return add_powered_by("📊 *No Leaderboard Data*\n\n⏳ Data is being fetched from Puch AI API\n\n🔄 Please wait for the initial sync to complete")
-        max_visitors = max(team.get("unique_visitors", 0) for team in leaderboard[:n]) or 1
-        result = f"🏆 *Puch AI Hackathon Leaderboard - Top {n}*\n\n"
+            return {
+                "status": "error",
+                "message": "No data available",
+                "powered_by": "https://puch.ai/mcp/4I2A7Z5bWA"
+            }
+            
+        teams_data = []
         for i, team in enumerate(leaderboard[:n], 1):
             team_name = team.get("team_name", "?")
             visitors = team.get("unique_visitors", 0)
             submissions = team.get("submissions", [])
             total_invocations = sum(sub.get("mcp_metrics", {}).get("invocations_total", 0) for sub in submissions)
-            rank = i
-            if i == 1:
-                medal = "🥇"
-            elif i == 2:
-                medal = "🥈"
-            elif i == 3:
-                medal = "🥉"
-            elif 4 <= i <= 9:
-                medal = f"{i}\u20E3"  # keycap digit emoji
-            else:
-                medal = f"{i}."
-            bar = emoji_bar(visitors, max_visitors)
-            result += f"{medal} *{team_name}* {bar}\n"
-            result += f"   🏅 Rank: {rank}\n"
-            result += f"   👀 Unique Visitors: {visitors:,}\n"
-            result += f"   ⚡️ Invocations: {total_invocations:,}\n\n"
+            
+            # Get server info from latest submission
+            latest_submission = submissions[0] if submissions else {}
+            server_name = latest_submission.get("server_name", "")
+            server_desc = latest_submission.get("server_description", "")
+            if server_desc:
+                server_desc = server_desc.split("\n")[0][:50] + ("..." if len(server_desc) > 50 else "")
+
+            # Get unique tools used
+            tools_used = set()
+            for sub in submissions:
+                metrics = sub.get("mcp_metrics", {})
+                tools_used.update(metrics.get("tool_invocations", {}).keys())
+            
+            # Format rank emoji
+            medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}\u20E3" if 4 <= i <= 9 else f"{i}."
+            
+            # Build team data
+            team_data = {
+                "rank": i,
+                "medal": medal,
+                "name": team_name,
+                "server": {
+                    "name": server_name,
+                    "description": server_desc
+                },
+                "metrics": {
+                    "visitors": visitors,
+                    "invocations": total_invocations
+                },
+                "tools": sorted(list(tools_used))[:3]
+            }
+            teams_data.append(team_data)
+            
+        # Create the final structured response
+        response = {
+            "status": "success",
+            "total_teams": len(teams_data),
+            "teams": teams_data
+        }
+        
+        # Add powered by info to the response
+        response["powered_by"] = "https://puch.ai/mcp/4I2A7Z5bWA"
+        
+        # Return the dictionary directly
+        return response
         return add_powered_by(result)
     except Exception as e:
-        return add_powered_by(f"❌ *Error*\n\n🔍 Error retrieving leaderboard: {str(e)}")
+        return {
+            "status": "error",
+            "message": f"Error retrieving leaderboard: {str(e)}",
+            "powered_by": "https://puch.ai/mcp/4I2A7Z5bWA"
+        }
 
 # Store for bearer tokens
 bearer_tokens: Dict[str, str] = {}
