@@ -43,9 +43,6 @@ def sanitize_response(text: str) -> str:
     # Remove special characters except emojis and common punctuation
     return re.sub(r"[<>{}\\^`$|~]", "", text)
 
-def add_powered_by(text: str) -> str:
-    return f"{text}\n\n_Powered by https://puch.ai/mcp/4I2A7Z5bWA_"
-
 # ================
 # App Setup
 # ================
@@ -67,40 +64,40 @@ app = FastMCP("puch-leaderboard-mcp", version="1.1.0")
 # About Tool (Discovery)
 # =====================
 @app.tool("about", description="Get the MCP server name and description for discovery and documentation.")
-async def about() -> dict:
+async def about() -> str:
     server_name = "Puch AI Leaderboard MCP"
     server_description = dedent("""
     This MCP server provides leaderboard and analytics tools for the Puch AI Hackathon. It enables LLMs, chatbots, and WhatsApp clients to query the top teams, compare team stats, and get minimal, branded leaderboard output. All endpoints are designed for easy integration and minimal, WhatsApp-friendly formatting.
     """)
-    return {
+    response = {
         "name": server_name,
         "description": server_description.strip()
     }
+    return json.dumps(response)
 
 # --- Tool: Team Comparison ---
 @app.tool("compare_teams")
-async def compare_teams_tool(team_names: str) -> Dict[str, Any]:
+async def compare_teams_tool(team_names: str) -> str:
     """Compare two or more teams side-by-side by unique visitors and team size.
     
     Returns:
-        Dict[str, Any]: Dictionary containing comparison data with structure:
+        str: JSON string containing comparison data with structure:
         {
             "status": "success" | "error",
             "message": str,  # Only for error responses
             "teams": List[Dict[str, Any]],  # List of team comparisons
-            "notes": List[str],  # Fuzzy matching notes
-            "powered_by": str
+            "notes": List[str]  # Fuzzy matching notes
         }
     """
     import aiohttp
     import difflib
     names = [name.strip() for name in team_names.split(",") if name.strip()]
     if len(names) < 2:
-        return {
+        error_response = {
             "status": "error",
-            "message": "Please provide at least two team names separated by commas",
-            "powered_by": "https://puch.ai/mcp/4I2A7Z5bWA"
+            "message": "Please provide at least two team names separated by commas"
         }
+        return json.dumps(error_response)
     try:
         async with aiohttp.ClientSession() as session:
             url = "https://api.puch.ai/hackathon-leaderboard?page=1&limit=20"
@@ -124,11 +121,12 @@ async def compare_teams_tool(team_names: str) -> Dict[str, Any]:
                 notes.append(f"'{name}'→'{actual}'")
         teams = [t for t in leaderboard if t.get("team_name") in matched_names]
         if not teams:
-            return {
+            error_response = {
                 "status": "error",
                 "message": "No data found for the given teams",
                 "powered_by": "https://puch.ai/mcp/4I2A7Z5bWA"
             }
+            return json.dumps(error_response)
 
         teams_data = []
         for idx, team in enumerate(teams, 1):
@@ -148,24 +146,29 @@ async def compare_teams_tool(team_names: str) -> Dict[str, Any]:
                 }
             })
         
-        return {
+        response = {
             "status": "success",
             "teams": teams_data,
             "notes": notes if notes else [],
             "powered_by": "https://puch.ai/mcp/4I2A7Z5bWA"
         }
+        return json.dumps(response)
     except Exception as e:
-        return add_powered_by(f"❌ *Error*\n\n🔍 Error comparing teams: {str(e)}")
+        error_response = {
+            "status": "error",
+            "message": f"Error comparing teams: {str(e)}"
+        }
+        return json.dumps(error_response)
 
 # --- Tool: Milestone Alerts ---
 MILESTONES = [1000, 5000, 10000, 25000, 50000]
 
 @app.tool("milestone_alert")
-async def milestone_alert_tool(team_name: str) -> Dict[str, Any]:
+async def milestone_alert_tool(team_name: str) -> str:
     """Notify if a team has reached a visitor milestone.
     
     Returns:
-        Dict[str, Any]: Dictionary containing milestone data with structure:
+        str: JSON string containing milestone data with structure:
         {
             "status": "success" | "error",
             "message": str,  # Error message if status is error
@@ -177,8 +180,7 @@ async def milestone_alert_tool(team_name: str) -> Dict[str, Any]:
                     "visitors": int,
                     "invocations": int
                 }
-            },
-            "powered_by": str
+            }
         }
     """
     import aiohttp
@@ -192,7 +194,11 @@ async def milestone_alert_tool(team_name: str) -> Dict[str, Any]:
             }
             async with session.get(url, headers=headers) as resp:
                 if resp.status != 200:
-                    return add_powered_by("❌ *Error*\n\nCould not fetch leaderboard data from API.")
+                    error_response = {
+                        "status": "error",
+                        "message": "Could not fetch leaderboard data from API"
+                    }
+                    return json.dumps(error_response)
                 data = await resp.json()
         leaderboard = data.get("leaderboard", [])
         all_teams = [team.get("team_name", "") for team in leaderboard]
@@ -200,7 +206,11 @@ async def milestone_alert_tool(team_name: str) -> Dict[str, Any]:
         actual_team = match[0] if match else team_name
         team = next((t for t in leaderboard if t.get("team_name") == actual_team), None)
         if not team:
-            return add_powered_by(f"❌ *Team Not Found*\n\n🔍 No data for team: {team_name}")
+            error_response = {
+                "status": "error",
+                "message": f"No data found for team: {team_name}"
+            }
+            return json.dumps(error_response)
         unique_visitors = team.get("unique_visitors", 0)
         submissions = team.get("submissions", [])
         total_invocations = sum(sub.get("mcp_metrics", {}).get("invocations_total", 0) for sub in submissions)
@@ -215,10 +225,25 @@ async def milestone_alert_tool(team_name: str) -> Dict[str, Any]:
             medal = f"{rank}\u20E3"
         else:
             medal = f"{rank}."
-        result = f"{medal} {actual_team}\n   👀 Unique Visitors: {unique_visitors}\n   ⚡️ Invocations: {total_invocations}\n"
-        return add_powered_by(result)
+        response = {
+            "status": "success",
+            "team": {
+                "name": actual_team,
+                "rank": rank,
+                "medal": medal,
+                "metrics": {
+                    "visitors": unique_visitors,
+                    "invocations": total_invocations
+                }
+            }
+        }
+        return json.dumps(response)
     except Exception as e:
-        return add_powered_by(f"❌ *Error*\n\n🔍 Error checking milestone: {str(e)}")
+        error_response = {
+            "status": "error",
+            "message": f"Error checking milestone: {str(e)}"
+        }
+        return json.dumps(error_response)
 
 # --- Tool: Personalized Stats (Subscribe) ---
 subscriptions = {}  # user_id -> team_name
@@ -238,9 +263,18 @@ async def subscribe_team_tool(user_id: str, team_name: str) -> str:
         actual_team = match[0] if match else team_name
         subscriptions[user_id] = actual_team
         note = f" (subscribed to '{actual_team}')" if actual_team != team_name else ""
-        return add_powered_by(f"🔔 *Subscribed!*\n\nUser {user_id} will receive updates for team: {actual_team}{note}")
+        response = {
+            "status": "success",
+            "message": f"User {user_id} will receive updates for team: {actual_team}",
+            "note": note if note else None
+        }
+        return json.dumps(response)
     except Exception as e:
-        return add_powered_by(f"❌ *Error*\n\n🔍 Error subscribing: {str(e)}")
+        error_response = {
+            "status": "error",
+            "message": f"Error subscribing: {str(e)}"
+        }
+        return json.dumps(error_response)
     finally:
         conn.close()
 
@@ -249,7 +283,11 @@ async def my_team_stats_tool(user_id: str) -> str:
     """Get personalized stats for the user's subscribed team."""
     team_name = subscriptions.get(user_id)
     if not team_name:
-        return add_powered_by("❌ *Not Subscribed*\n\nYou are not subscribed to any team. Use 'subscribe_team' to subscribe.")
+        error_response = {
+            "status": "error",
+            "message": "Not subscribed. Use 'subscribe_team' to subscribe."
+        }
+        return json.dumps(error_response)
     return await get_leaderboard_stats_tool(team_name)
 
 # --- Tool: Top Movers ---
@@ -275,7 +313,11 @@ async def top_movers_tool() -> str:
     current_ranks = get_current_ranks()
     if not previous_ranks:
         previous_ranks = current_ranks.copy()
-        return add_powered_by("⏳ *Top Movers*\n\nTracking started. Please check again after the next update.")
+        response = {
+            "status": "info",
+            "message": "Tracking started. Please check again after the next update."
+        }
+        return json.dumps(response)
     # Calculate movement
     movement = []
     for team, curr_rank in current_ranks.items():
@@ -285,15 +327,24 @@ async def top_movers_tool() -> str:
             movement.append((team, change))
     # Sort by biggest movers
     movement.sort(key=lambda x: abs(x[1]), reverse=True)
+    
+    response = {
+        "status": "success",
+        "movements": []
+    }
+    
     if not movement:
-        result = "🔄 *Top Movers*\n\nNo significant changes since last update."
+        response["message"] = "No significant changes since last update"
     else:
-        result = "📈 *Top Movers*\n\n"
         for team, change in movement[:5]:
-            arrow = "⬆️" if change > 0 else "⬇️"
-            result += f"{arrow} *{team}* ({abs(change)} places)\n"
+            response["movements"].append({
+                "team": team,
+                "change": change,
+                "direction": "up" if change > 0 else "down"
+            })
+    
     previous_ranks = current_ranks.copy()
-    return add_powered_by(result)
+    return json.dumps(response)
 # Enhanced leaderboard with server info and metrics
 @app.tool(
     name="top_n_leaderboard",
@@ -319,19 +370,18 @@ Example:
    🛠️ Tools: tool1, tool2
    � About: AI-powered mood planner and recommendations"""
 )
-async def top_n_leaderboard_tool(n: int = 5) -> Dict[str, Any]:
+async def top_n_leaderboard_tool(n: int = 5) -> str:
     """Get top N teams with server info, visitors, and tool usage stats.
     
     Args:
         n: Number of teams to return (default: 5)
     
     Returns:
-        Dict[str, Any]: Dictionary containing team data with structure:
+        str: JSON string containing team data with structure:
         {
             "status": str,  # "success" or "error"
             "total_teams": int,
-            "teams": List[Dict[str, Any]],  # List of team data dictionaries
-            "powered_by": str
+            "teams": List[Dict[str, Any]]  # List of team data dictionaries
         }
 
         Team data dictionary structure:
@@ -417,18 +467,15 @@ async def top_n_leaderboard_tool(n: int = 5) -> Dict[str, Any]:
             "teams": teams_data
         }
         
-        # Add powered by info to the response
-        response["powered_by"] = "https://puch.ai/mcp/4I2A7Z5bWA"
-        
-        # Return the dictionary directly
-        return response
-        return add_powered_by(result)
+        # Convert dictionary to JSON string
+        return json.dumps(response)
     except Exception as e:
-        return {
+        error_response = {
             "status": "error",
             "message": f"Error retrieving leaderboard: {str(e)}",
             "powered_by": "https://puch.ai/mcp/4I2A7Z5bWA"
         }
+        return json.dumps(error_response)
 
 # Store for bearer tokens
 bearer_tokens: Dict[str, str] = {}
@@ -621,7 +668,7 @@ def get_team_stats(team_name: str) -> Dict[str, Any]:
         ''', (actual_team,))
         rows = cursor.fetchall()
         if not rows:
-            return {"error": f"Team '{team_name}' not found"}
+            return json.dumps({"error": f"Team '{team_name}' not found"})
         # Process data
         team_data = {
             "team_name": rows[0][0],
@@ -640,10 +687,11 @@ def get_team_stats(team_name: str) -> Dict[str, Any]:
         # If fuzzy match was used, add a note
         if actual_team != team_name:
             team_data["fuzzy_note"] = f"(Showing results for '{actual_team}')"
-        return team_data
+        return json.dumps(team_data)
     except Exception as e:
         logger.error(f"Error getting team stats: {e}")
-        return {"error": f"Database error: {str(e)}"}
+        error_response = {"error": f"Database error: {str(e)}"}
+        return json.dumps(error_response)
     finally:
         conn.close()
 
