@@ -1,24 +1,11 @@
-# Place these after app = FastMCP(...)
 
-# Place these after app = FastMCP(...)
-# Fuzzy matching for team names
+
+# =========================
+# Imports and Configuration
+# =========================
 import re
 import difflib
-# Helper function to remove special characters except emojis
-def sanitize_response(text: str) -> str:
-    # Remove special characters except emojis and common punctuation
-    # Allow: a-zA-Z0-9, whitespace, emojis, and .,:;!?@#%&*()[]-_+=/\\'"\n
-    # Remove angle brackets, curly braces, and other unwanted symbols
-    # Unicode emoji range: [\U0001F300-\U0001FAFF]
-    # This regex keeps emojis, alphanumerics, whitespace, and common punctuation
-    return re.sub(r"[<>{}\^`$|~]", "", text)
-
-# Helper to append powered by link
-def add_powered_by(text: str) -> str:
-    return f"{text}\n\n_Powered by https://puch.ai/mcp/4I2A7Z5bWA_"
-#!/usr/bin/env python3
-"""MCP server with validate and bearer token functions using FastMCP."""
-
+from textwrap import dedent
 import asyncio
 import json
 import logging
@@ -30,10 +17,38 @@ import pytz
 from typing import Any, Dict, List
 import aiohttp
 from dotenv import load_dotenv
-
-
 from fastmcp import FastMCP
 
+# ================
+# Helper Functions
+# ================
+def emoji_bar(value: int, max_value: int, length: int = 10, emoji: str = '🟩') -> str:
+    """Create an emoji-based progress bar.
+    
+    Args:
+        value: Current value to represent
+        max_value: Maximum value for scaling
+        length: Maximum number of emoji characters to use
+        emoji: The emoji character to use for the bar
+        
+    Returns:
+        A string of emojis representing the value as a proportion of max_value
+    """
+    if max_value == 0:
+        return ''
+    bars = int((value / max_value) * length)
+    return emoji * bars
+
+def sanitize_response(text: str) -> str:
+    # Remove special characters except emojis and common punctuation
+    return re.sub(r"[<>{}\\^`$|~]", "", text)
+
+def add_powered_by(text: str) -> str:
+    return f"{text}\n\n_Powered by https://puch.ai/mcp/4I2A7Z5bWA_"
+
+# ================
+# App Setup
+# ================
 # Load environment variables
 load_dotenv()
 
@@ -45,16 +60,22 @@ logger = logging.getLogger(__name__)
 AUTH_TOKEN = os.getenv("AUTH_TOKEN", "default-secure-token")
 MY_NUMBER = os.getenv("MY_NUMBER", "Unknown")
 
-# Create FastMCP server instance
+# Create FastMCP server instance with version
+app = FastMCP("puch-leaderboard-mcp", version="1.1.0")
 
-app = FastMCP("puch-leaderboard-mcp")
-
-# Emoji bar chart helper
-def emoji_bar(value, max_value, length=10, emoji='🟩'):
-    if max_value == 0:
-        return ''
-    bars = int((value / max_value) * length)
-    return emoji * bars
+# =====================
+# About Tool (Discovery)
+# =====================
+@app.tool("about", description="Get the MCP server name and description for discovery and documentation.")
+async def about() -> dict:
+    server_name = "Puch AI Leaderboard MCP"
+    server_description = dedent("""
+    This MCP server provides leaderboard and analytics tools for the Puch AI Hackathon. It enables LLMs, chatbots, and WhatsApp clients to query the top teams, compare team stats, and get minimal, branded leaderboard output. All endpoints are designed for easy integration and minimal, WhatsApp-friendly formatting.
+    """)
+    return {
+        "name": server_name,
+        "description": server_description.strip()
+    }
 
 # --- Tool: Team Comparison ---
 @app.tool("compare_teams")
@@ -91,14 +112,22 @@ async def compare_teams_tool(team_names: str) -> str:
             return add_powered_by("❌ *Error*\n\nNo data found for the given teams.")
         max_visitors = max(t.get("unique_visitors", 0) for t in teams) or 1
         result = "🤝 *Team Comparison*\n\n"
-        for team in teams:
+        for idx, team in enumerate(teams, 1):
             team_name = team.get("team_name", "?")
             visitors = team.get("unique_visitors", 0)
-            team_size = team.get("team_size", 0)
             submissions = team.get("submissions", [])
             total_invocations = sum(sub.get("mcp_metrics", {}).get("invocations_total", 0) for sub in submissions)
-            bar = emoji_bar(visitors, max_visitors)
-            result += f"*{team_name}* {bar}\n   👥 Team Size: {team_size}\n   👀 Unique Visitors: {visitors:,}\n   ⚡️ Invocations: {total_invocations}\n\n"
+            if idx == 1:
+                medal = "🥇"
+            elif idx == 2:
+                medal = "🥈"
+            elif idx == 3:
+                medal = "🥉"
+            elif 4 <= idx <= 9:
+                medal = f"{idx}\u20E3"
+            else:
+                medal = f"{idx}."
+            result += f"{medal} {team_name}\n   👀 Unique Visitors: {visitors:,}\n   ⚡️ Invocations: {total_invocations}\n\n"
         if notes:
             result += "_Fuzzy matched: " + ", ".join(notes) + "_\n"
         return add_powered_by(result)
@@ -132,19 +161,20 @@ async def milestone_alert_tool(team_name: str) -> str:
         if not team:
             return add_powered_by(f"❌ *Team Not Found*\n\n🔍 No data for team: {team_name}")
         unique_visitors = team.get("unique_visitors", 0)
-        team_size = team.get("team_size", 0)
         submissions = team.get("submissions", [])
         total_invocations = sum(sub.get("mcp_metrics", {}).get("invocations_total", 0) for sub in submissions)
-        reached = [m for m in MILESTONES if unique_visitors >= m]
-        note = f"\n_(Showing results for '{actual_team}')_" if actual_team != team_name else ""
-        result = f"*{actual_team}*\n👥 Team Size: {team_size}\n👀 Unique Visitors: {unique_visitors:,}\n⚡️ Invocations: {total_invocations}\n"
-        if not reached:
-            next_milestone = min([m for m in MILESTONES if m > unique_visitors], default=None)
-            if next_milestone:
-                result += f"\nNext milestone: {next_milestone:,} visitors.{note}"
+        rank = all_teams.index(actual_team) + 1 if actual_team in all_teams else "N/A"
+        if rank == 1:
+            medal = "🥇"
+        elif rank == 2:
+            medal = "🥈"
+        elif rank == 3:
+            medal = "🥉"
+        elif 4 <= rank <= 9:
+            medal = f"{rank}\u20E3"
         else:
-            last = max(reached)
-            result += f"\n🎉 *Milestone Reached!* {last:,} visitors!{note}"
+            medal = f"{rank}."
+        result = f"{medal} {actual_team}\n   👀 Unique Visitors: {unique_visitors}\n   ⚡️ Invocations: {total_invocations}\n"
         return add_powered_by(result)
     except Exception as e:
         return add_powered_by(f"❌ *Error*\n\n🔍 Error checking milestone: {str(e)}")
@@ -224,7 +254,35 @@ async def top_movers_tool() -> str:
     previous_ranks = current_ranks.copy()
     return add_powered_by(result)
 # Enhanced leaderboard with invocations and MCP metrics
-@app.tool("top_n_leaderboard")
+@app.tool(
+    "top_n_leaderboard",
+    description="""
+MCP Tool: Top N Leaderboard
+
+Use case: Retrieve the top N teams from the Puch AI Hackathon leaderboard, ranked by unique visitors. 
+This tool is designed for leaderboard display, comparison, and analytics in chatbots, LLMs, and WhatsApp integrations.
+
+Request Parameters:
+    - n (int, optional): Number of top teams to return. Default is 5.
+
+Response Format:
+    - For each team, returns:
+        - Medal/rank emoji (🥇, 🥈, 🥉, 4️⃣, ...)
+        - Team name
+        - Unique visitors (int)
+        - Total invocations (int, summed across all submissions)
+    - Minimal, WhatsApp/LLM-friendly output. No extra stats.
+
+Example Response:
+🥇 ModelMinds
+     👀 Unique Visitors: 1,410
+     ⚡️ Invocations: 282
+
+🥈 InfiniteCoffee
+     👀 Unique Visitors: 1,047
+     ⚡️ Invocations: 263
+"""
+)
 async def top_n_leaderboard_tool(n: int = 5) -> str:
     """Get top N teams from the Puch AI leaderboard with emoji bar chart and invocation stats."""
     import aiohttp
@@ -276,31 +334,54 @@ bearer_tokens: Dict[str, str] = {}
 DB_PATH = "puch_leaderboard.db"
 LEADERBOARD_URL = "https://api.puch.ai/hackathon-leaderboard"
 
-def init_database():
-    """Initialize SQLite database."""
+def init_database() -> None:
+    """Initialize SQLite database with required schema.
+    
+    Creates the following:
+    1. leaderboard table with team data
+    2. Index on team_name for faster lookups
+    
+    Schema:
+    - id: Unique identifier for each record
+    - team_name: Name of the team
+    - server_id: Unique identifier for the team's server
+    - submitted_at: Timestamp of submission
+    - visitors: Total number of visitors
+    - unique_visitors: Number of unique visitors
+    - team_size: Number of team members
+    - last_updated: Timestamp of last update
+    """
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
-    # Create leaderboard table
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS leaderboard (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            team_name TEXT NOT NULL,
-            server_id TEXT,
-            submitted_at TEXT,
-            visitors INTEGER,
-            unique_visitors INTEGER,
-            team_size INTEGER,
-            last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    
-    # Create index for faster lookups
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_team_name ON leaderboard(team_name)')
-    
-    conn.commit()
-    conn.close()
-    logger.info("Database initialized")
+    try:
+        # Create leaderboard table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS leaderboard (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                team_name TEXT NOT NULL,
+                server_id TEXT,
+                submitted_at TEXT,
+                visitors INTEGER,
+                unique_visitors INTEGER,
+                team_size INTEGER,
+                last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Create index for faster lookups
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_team_name ON leaderboard(team_name)')
+        
+        conn.commit()
+        logger.info("Database initialized successfully")
+        
+    except sqlite3.Error as e:
+        logger.error(f"Database initialization failed: {e}")
+        conn.rollback()
+        raise
+        
+    finally:
+        conn.close()
 
 # Initialize database when module is imported
 init_database()
@@ -543,107 +624,7 @@ async def health_check_tool() -> str:
 
 ✅ Server is running smoothly and all systems are operational"""
 
-@app.tool("top_5_leaderboard")
-async def top_5_leaderboard_tool() -> str:
-    """Get top 5 teams from the Puch AI leaderboard."""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    try:
-        # Get top 5 teams by unique visitors
-        cursor.execute('''
-            SELECT team_name, unique_visitors, team_size
-            FROM leaderboard 
-            GROUP BY team_name 
-            ORDER BY unique_visitors DESC 
-            LIMIT 5
-        ''')
-        
-        rows = cursor.fetchall()
-        
-        if not rows:
-            return "📊 *No Leaderboard Data*\n\n⏳ Data is being fetched from Puch AI API\n\n🔄 Please wait for the initial sync to complete"
-        
-        # Format for WhatsApp display
-        result = "🏆 *Puch AI Hackathon Leaderboard - Top 5*\n\n"
-        
-        for i, row in enumerate(rows, 1):
-            team_name = row[0]
-            visitors = row[1]
-            team_size = row[2]
-            
-            # Add medal emojis for top 3
-            if i == 1:
-                medal = "🥇"
-            elif i == 2:
-                medal = "🥈"
-            elif i == 3:
-                medal = "🥉"
-            else:
-                medal = f"{i}️⃣"
-            
-            result += f"{medal} *{team_name}*\n"
-            result += f"   👥 Team Size: {team_size}\n"
-            result += f"   👀 Unique Visitors: {visitors:,}\n\n"
-        
-    # Last Updated removed as per request
-        return result
-        
-    except Exception as e:
-        return f"❌ *Error*\n\n🔍 Error retrieving leaderboard: {str(e)}"
-    finally:
-        conn.close()
 
-@app.tool("top_10_leaderboard")
-async def top_10_leaderboard_tool() -> str:
-    """Get top 10 teams from the Puch AI leaderboard."""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    try:
-        # Get top 10 teams by unique visitors
-        cursor.execute('''
-            SELECT team_name, unique_visitors, team_size
-            FROM leaderboard 
-            GROUP BY team_name 
-            ORDER BY unique_visitors DESC 
-            LIMIT 10
-        ''')
-        
-        rows = cursor.fetchall()
-        
-        if not rows:
-            return "📊 *No Leaderboard Data*\n\n⏳ Data is being fetched from Puch AI API\n\n🔄 Please wait for the initial sync to complete"
-        
-        # Format for WhatsApp display
-        result = "🏆 *Puch AI Hackathon Leaderboard - Top 10*\n\n"
-        
-        for i, row in enumerate(rows, 1):
-            team_name = row[0]
-            visitors = row[1]
-            team_size = row[2]
-            
-            # Add medal emojis for top 3
-            if i == 1:
-                medal = "🥇"
-            elif i == 2:
-                medal = "🥈"
-            elif i == 3:
-                medal = "🥉"
-            else:
-                medal = f"{i}️⃣"
-            
-            result += f"{medal} *{team_name}*\n"
-            result += f"   👥 Team Size: {team_size}\n"
-            result += f"   👀 Unique Visitors: {visitors:,}\n\n"
-        
-    # Last Updated removed as per request
-        return result
-        
-    except Exception as e:
-        return f"❌ *Error*\n\n🔍 Error retrieving leaderboard: {str(e)}"
-    finally:
-        conn.close()
 
 @app.tool("get_leaderboard_stats")
 async def get_leaderboard_stats_tool(team_name: str) -> str:
@@ -671,19 +652,21 @@ async def get_leaderboard_stats_tool(team_name: str) -> str:
         if not team:
             return add_powered_by(f"❌ *Team Not Found*\n\n🔍 No data for team: {team_name}")
         unique_visitors = team.get("unique_visitors", 0)
-        team_size = team.get("team_size", 0)
         submissions = team.get("submissions", [])
         total_invocations = sum(sub.get("mcp_metrics", {}).get("invocations_total", 0) for sub in submissions)
         rank = all_teams.index(actual_team) + 1 if actual_team in all_teams else "N/A"
+        if rank == 1:
+            medal = "🥇"
+        elif rank == 2:
+            medal = "🥈"
+        elif rank == 3:
+            medal = "�"
+        elif 4 <= rank <= 9:
+            medal = f"{rank}\u20E3"
+        else:
+            medal = f"{rank}."
         safe_team_name = sanitize_response(actual_team)
-        result = f"🏆 *Team Rank Information*\n\n"
-        result += f"📊 Team: {safe_team_name}\n"
-        result += f"🥇 Current Rank: #{rank}\n"
-        result += f"👤 Unique Visitors: {unique_visitors}\n"
-        result += f"👥 Team Size: {team_size}\n"
-        result += f"⚡️ Invocations: {total_invocations}\n"
-        if actual_team != team_name:
-            result += f"\n_(Showing results for '{actual_team}')_\n"
+        result = f"{medal} {safe_team_name}\n   👀 Unique Visitors: {unique_visitors}\n   ⚡️ Invocations: {total_invocations}\n"
         return add_powered_by(result)
     except Exception as e:
         return add_powered_by(f"❌ *Error*\n\n🔍 Error retrieving team stats: {str(e)}")
