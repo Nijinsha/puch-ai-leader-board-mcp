@@ -60,15 +60,24 @@ def emoji_bar(value, max_value, length=10, emoji='🟩'):
 @app.tool("compare_teams")
 async def compare_teams_tool(team_names: str) -> str:
     """Compare two or more teams side-by-side by unique visitors and team size."""
+    import aiohttp
+    import difflib
     names = [name.strip() for name in team_names.split(",") if name.strip()]
     if len(names) < 2:
         return "❌ *Error*\n\nPlease provide at least two team names separated by commas."
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
     try:
-        cursor.execute('SELECT DISTINCT team_name FROM leaderboard')
-        all_teams = [row[0] for row in cursor.fetchall()]
-        # Fuzzy match each name
+        async with aiohttp.ClientSession() as session:
+            url = "https://api.puch.ai/hackathon-leaderboard?page=1&limit=20"
+            headers = {
+                'User-Agent': 'Mozilla/5.0',
+                'Accept': 'application/json',
+            }
+            async with session.get(url, headers=headers) as resp:
+                if resp.status != 200:
+                    return add_powered_by("❌ *Error*\n\nCould not fetch leaderboard data from API.")
+                data = await resp.json()
+        leaderboard = data.get("leaderboard", [])
+        all_teams = [team.get("team_name", "") for team in leaderboard]
         matched_names = []
         notes = []
         for name in names:
@@ -77,25 +86,40 @@ async def compare_teams_tool(team_names: str) -> str:
             matched_names.append(actual)
             if actual != name:
                 notes.append(f"'{name}'→'{actual}'")
-        placeholders = ",".join(["?"] * len(matched_names))
-        cursor.execute(f'''SELECT team_name, unique_visitors, team_size FROM leaderboard WHERE team_name IN ({placeholders}) GROUP BY team_name''', matched_names)
-        rows = cursor.fetchall()
-        if not rows:
-            return "❌ *Error*\n\nNo data found for the given teams."
-        # Find max visitors for bar chart
-        max_visitors = max(row[1] for row in rows) if rows else 1
+        teams = [t for t in leaderboard if t.get("team_name") in matched_names]
+        if not teams:
+            return add_powered_by("❌ *Error*\n\nNo data found for the given teams.")
+        max_visitors = max(t.get("unique_visitors", 0) for t in teams) or 1
         result = "🤝 *Team Comparison*\n\n"
-        for row in rows:
-            team_name, visitors, team_size = row
+        for team in teams:
+            team_name = team.get("team_name", "?")
+            visitors = team.get("unique_visitors", 0)
+            team_size = team.get("team_size", 0)
+            submissions = team.get("submissions", [])
+            total_invocations = 0
+            tool_spread = []
+            last_invoked = None
+            for sub in submissions:
+                mcp = sub.get("mcp_metrics", {})
+                total_invocations += mcp.get("invocations_total", 0)
+                if mcp.get("tool_spread_coef"):
+                    for tool, coef in mcp["tool_spread_coef"].items():
+                        tool_spread.append(f"{tool}: {coef:.2f}")
+                if mcp.get("last_invoked"):
+                    if not last_invoked or mcp["last_invoked"] > last_invoked:
+                        last_invoked = mcp["last_invoked"]
             bar = emoji_bar(visitors, max_visitors)
-            result += f"*{team_name}* {bar}\n   👥 Team Size: {team_size}\n   👀 Unique Visitors: {visitors:,}\n\n"
+            result += f"*{team_name}* {bar}\n   👥 Team Size: {team_size}\n   👀 Unique Visitors: {visitors:,}\n   ⚡️ Invocations: {total_invocations}\n"
+            if tool_spread:
+                result += f"   🛠️ Tool Spread: {', '.join(tool_spread)}\n"
+            if last_invoked:
+                result += f"   ⏱️ Last Invoked: {last_invoked}\n"
+            result += "\n"
         if notes:
             result += "_Fuzzy matched: " + ", ".join(notes) + "_\n"
         return add_powered_by(result)
     except Exception as e:
-        return f"❌ *Error*\n\n🔍 Error comparing teams: {str(e)}"
-    finally:
-        conn.close()
+        return add_powered_by(f"❌ *Error*\n\n🔍 Error comparing teams: {str(e)}")
 
 # --- Tool: Milestone Alerts ---
 MILESTONES = [1000, 5000, 10000, 25000, 50000]
@@ -103,34 +127,58 @@ MILESTONES = [1000, 5000, 10000, 25000, 50000]
 @app.tool("milestone_alert")
 async def milestone_alert_tool(team_name: str) -> str:
     """Notify if a team has reached a visitor milestone."""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
+    import aiohttp
+    import difflib
     try:
-        # Fuzzy match team name
-        cursor.execute('SELECT DISTINCT team_name FROM leaderboard')
-        all_teams = [row[0] for row in cursor.fetchall()]
+        async with aiohttp.ClientSession() as session:
+            url = "https://api.puch.ai/hackathon-leaderboard?page=1&limit=20"
+            headers = {
+                'User-Agent': 'Mozilla/5.0',
+                'Accept': 'application/json',
+            }
+            async with session.get(url, headers=headers) as resp:
+                if resp.status != 200:
+                    return add_powered_by("❌ *Error*\n\nCould not fetch leaderboard data from API.")
+                data = await resp.json()
+        leaderboard = data.get("leaderboard", [])
+        all_teams = [team.get("team_name", "") for team in leaderboard]
         match = difflib.get_close_matches(team_name, all_teams, n=1, cutoff=0.6)
         actual_team = match[0] if match else team_name
-        cursor.execute('''SELECT unique_visitors FROM leaderboard WHERE team_name = ? ORDER BY unique_visitors DESC LIMIT 1''', (actual_team,))
-        row = cursor.fetchone()
-        if not row:
+        team = next((t for t in leaderboard if t.get("team_name") == actual_team), None)
+        if not team:
             return add_powered_by(f"❌ *Team Not Found*\n\n🔍 No data for team: {team_name}")
-        visitors = row[0]
-        reached = [m for m in MILESTONES if visitors >= m]
+        unique_visitors = team.get("unique_visitors", 0)
+        team_size = team.get("team_size", 0)
+        submissions = team.get("submissions", [])
+        total_invocations = 0
+        tool_spread = []
+        last_invoked = None
+        for sub in submissions:
+            mcp = sub.get("mcp_metrics", {})
+            total_invocations += mcp.get("invocations_total", 0)
+            if mcp.get("tool_spread_coef"):
+                for tool, coef in mcp["tool_spread_coef"].items():
+                    tool_spread.append(f"{tool}: {coef:.2f}")
+            if mcp.get("last_invoked"):
+                if not last_invoked or mcp["last_invoked"] > last_invoked:
+                    last_invoked = mcp["last_invoked"]
+        reached = [m for m in MILESTONES if unique_visitors >= m]
         note = f"\n_(Showing results for '{actual_team}')_" if actual_team != team_name else ""
+        result = f"*{actual_team}* has {unique_visitors:,} unique visitors.\n👥 Team Size: {team_size}\n⚡️ Invocations: {total_invocations}\n"
+        if tool_spread:
+            result += f"🛠️ Tool Spread: {', '.join(tool_spread)}\n"
+        if last_invoked:
+            result += f"⏱️ Last Invoked: {last_invoked}\n"
         if not reached:
-            next_milestone = min([m for m in MILESTONES if m > visitors], default=None)
+            next_milestone = min([m for m in MILESTONES if m > unique_visitors], default=None)
             if next_milestone:
-                return add_powered_by(f"⏳ *Milestone Alert*\n\n*{actual_team}* has {visitors:,} unique visitors.\nNext milestone: {next_milestone:,} visitors.{note}")
-            else:
-                return add_powered_by(f"*{actual_team}* has {visitors:,} unique visitors.{note}")
+                result += f"\nNext milestone: {next_milestone:,} visitors.{note}"
         else:
             last = max(reached)
-            return add_powered_by(f"🎉 *Milestone Reached!*\n\n*{actual_team}* has crossed {last:,} unique visitors!\nCurrent: {visitors:,} visitors.{note}")
+            result += f"\n🎉 *Milestone Reached!* {last:,} visitors!{note}"
+        return add_powered_by(result)
     except Exception as e:
         return add_powered_by(f"❌ *Error*\n\n🔍 Error checking milestone: {str(e)}")
-    finally:
-        conn.close()
 
 # --- Tool: Personalized Stats (Subscribe) ---
 subscriptions = {}  # user_id -> team_name
@@ -653,45 +701,58 @@ async def get_leaderboard_stats_tool(team_name: str) -> str:
     """Get Puch AI leaderboard statistics for a specific team."""
     if not team_name:
         return add_powered_by("❌ *Error*\n\n📝 Team name is required")
-    team_stats = get_team_stats(team_name)
-    # Return formatted text based on result
-    if "error" in team_stats:
-        return add_powered_by(f"❌ *Team Not Found*\n\n🔍 {team_stats['error']}")
-    else:
-        # Get team rank
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        try:
-            cursor.execute('''
-                SELECT COUNT(*) + 1 as rank
-                FROM (
-                    SELECT DISTINCT team_name, unique_visitors
-                    FROM leaderboard
-                    GROUP BY team_name
-                ) ranked_teams
-                WHERE unique_visitors > (
-                    SELECT unique_visitors 
-                    FROM leaderboard 
-                    WHERE team_name = ? 
-                    LIMIT 1
-                )
-            ''', (team_stats["team_name"],))
-            rank_row = cursor.fetchone()
-            rank = rank_row[0] if rank_row else "N/A"
-        except Exception:
-            rank = "N/A"
-        finally:
-            conn.close()
-    # Add unique visitors info
-    unique_visitors = team_stats.get("unique_visitors", "N/A")
-    safe_team_name = sanitize_response(team_stats["team_name"])
-    result = f"🏆 *Team Rank Information*\n\n"
-    result += f"📊 Team: {safe_team_name}\n"
-    result += f"🥇 Current Rank: #{rank}\n"
-    result += f"👤 Unique Visitors: {unique_visitors}\n"
-    if "fuzzy_note" in team_stats:
-        result += f"\n_{team_stats['fuzzy_note']}_\n"
-    return add_powered_by(result)
+    import aiohttp
+    try:
+        async with aiohttp.ClientSession() as session:
+            url = "https://api.puch.ai/hackathon-leaderboard?page=1&limit=20"
+            headers = {
+                'User-Agent': 'Mozilla/5.0',
+                'Accept': 'application/json',
+            }
+            async with session.get(url, headers=headers) as resp:
+                if resp.status != 200:
+                    return add_powered_by("❌ *Error*\n\nCould not fetch leaderboard data from API.")
+                data = await resp.json()
+        leaderboard = data.get("leaderboard", [])
+        import difflib
+        all_teams = [team.get("team_name", "") for team in leaderboard]
+        match = difflib.get_close_matches(team_name, all_teams, n=1, cutoff=0.6)
+        actual_team = match[0] if match else team_name
+        team = next((t for t in leaderboard if t.get("team_name") == actual_team), None)
+        if not team:
+            return add_powered_by(f"❌ *Team Not Found*\n\n🔍 No data for team: {team_name}")
+        unique_visitors = team.get("unique_visitors", 0)
+        team_size = team.get("team_size", 0)
+        submissions = team.get("submissions", [])
+        total_invocations = 0
+        tool_spread = []
+        last_invoked = None
+        for sub in submissions:
+            mcp = sub.get("mcp_metrics", {})
+            total_invocations += mcp.get("invocations_total", 0)
+            if mcp.get("tool_spread_coef"):
+                for tool, coef in mcp["tool_spread_coef"].items():
+                    tool_spread.append(f"{tool}: {coef:.2f}")
+            if mcp.get("last_invoked"):
+                if not last_invoked or mcp["last_invoked"] > last_invoked:
+                    last_invoked = mcp["last_invoked"]
+        rank = all_teams.index(actual_team) + 1 if actual_team in all_teams else "N/A"
+        safe_team_name = sanitize_response(actual_team)
+        result = f"🏆 *Team Rank Information*\n\n"
+        result += f"📊 Team: {safe_team_name}\n"
+        result += f"🥇 Current Rank: #{rank}\n"
+        result += f"👤 Unique Visitors: {unique_visitors}\n"
+        result += f"👥 Team Size: {team_size}\n"
+        result += f"⚡️ Invocations: {total_invocations}\n"
+        if tool_spread:
+            result += f"🛠️ Tool Spread: {', '.join(tool_spread)}\n"
+        if last_invoked:
+            result += f"⏱️ Last Invoked: {last_invoked}\n"
+        if actual_team != team_name:
+            result += f"\n_(Showing results for '{actual_team}')_\n"
+        return add_powered_by(result)
+    except Exception as e:
+        return add_powered_by(f"❌ *Error*\n\n🔍 Error retrieving team stats: {str(e)}")
 
 @app.tool("refresh_leaderboard")
 async def refresh_leaderboard_tool() -> str:
